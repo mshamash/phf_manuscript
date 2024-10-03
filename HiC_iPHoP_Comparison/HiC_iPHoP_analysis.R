@@ -182,5 +182,5 @@ comparison.plot <- comparison.merged %>%
 
 comparison.plot
 
-ggsave(file="~/Desktop/test.svg", plot=comparison.plot, width=7, height=6)
+ggsave(file="Figure1.svg", plot=comparison.plot, width=7, height=6)
 
