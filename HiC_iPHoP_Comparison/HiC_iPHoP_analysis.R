@@ -170,7 +170,7 @@ comparison.merged$comparison <- factor(comparison.merged$comparison, levels = c(
 comparison.plot <- comparison.merged %>% 
   ggplot(aes(x = variable, y = 100*concordance, fill = comparison)) +
   geom_bar(stat = "identity", position = "dodge", colour = "black") +
-  ylab("% concordance") +
+  ylab("% concordance between iPHoP and Hi-C") +
   xlab("Taxonomic rank") +
   scale_fill_manual(values = c("#CC6666", "#9999CC", "#66CC99"), name = "Comparison", labels = c("Top hit (iPHoP) vs top hit (Hi-C)", "Top hit (iPHoP) vs all hits (Hi-C)", "All hits (iPHoP) vs all hits (Hi-C)")) +
   theme_bw() +

@@ -7,6 +7,7 @@ library(cowplot)
 library(gridExtra)
 library(grid)
 library(viridis)
+library(ggpubr)
 
 
 ps <- readRDS("phyloseq_vir_raw.RDS") # import phyloseq object
@@ -58,7 +59,7 @@ plot_diff <- plot_microshades(mdf, cdf, x = "Sample") +
   theme(axis.text.x = element_text(size= 10)) +
   theme(legend.position = "none") +
   theme(axis.text.x=element_blank())
-plot_grid(plot_diff, arrangeGrob(legend, nullGrob(), ncol = 1, heights = c(0.80, 0.20)),  rel_widths = c(1, .25))
+fig2a <- plot_grid(plot_diff, arrangeGrob(legend, nullGrob(), ncol = 1, heights = c(0.80, 0.20)),  rel_widths = c(1, .25))
 
 
 # calculate percent unknown host per sample
@@ -146,7 +147,7 @@ dist.merged.all.filt <- dist.merged.all.filt %>% mutate(same.subject = subject1 
 
 # FIGURE 2B - distances grouped by comparison type for all 3 metrics
 labels <- c("Bray-Curtis (contig)", "Bray-Curtis (PHF)", "Weighted UniFrac (PHF)")
-dist.merged.all.filt %>% ggplot(aes(x = same.subject, y = value, color = metric)) +
+fig2b <- dist.merged.all.filt %>% filter(!metric %in% c("dist.aitch.filt", "dist.aitch.filt.pbf")) %>% ggplot(aes(x = same.subject, y = value, color = metric)) +
   geom_violin(scale = "width", aes(fill=metric), alpha = 0.3, position = position_dodge(width = 0.9)) +
   geom_boxplot(outlier.shape = NA, width = 0.3, aes(fill=metric), color="black", position = position_dodge(width = 0.9)) +
   scale_fill_viridis(discrete = T, begin = 0.1, end = 0.7, labels = labels) +
@@ -154,6 +155,7 @@ dist.merged.all.filt %>% ggplot(aes(x = same.subject, y = value, color = metric)
   scale_x_discrete(labels = c("FALSE" = "inter-individual (across)", "TRUE"  = "intra-individual (within)")) +
   scale_y_continuous(breaks = c(0.25, 0.5, 0.75, 1.0), limits = c(0, 1.1)) +
   theme_bw() +
+  theme(legend.position = "none") +
   labs(x = "Comparison", y = "Distance", color = "Distance metric", fill = "Distance metric") +
   annotate("segment", x = 0.66, xend = 0.96, y = 1.03, yend = 1.03, 
            linetype = "solid", color = "black", size = 0.75) +
@@ -164,7 +166,7 @@ dist.merged.all.filt %>% ggplot(aes(x = same.subject, y = value, color = metric)
   annotate("segment", x = 0.66, xend = 1.29, y = 1.08, yend = 1.08, 
            linetype = "solid", color = "black", size = 0.75) +
   annotate("text", x = 0.98, y = 1.09, label = "****", size = 5, color = "black") +
-  
+
   annotate("segment", x = 1.66, xend = 1.96, y = 1.03, yend = 1.03, 
            linetype = "solid", color = "black", size = 0.75) +
   annotate("text", x = 1.82, y = 1.04, label = "***", size = 5, color = "black") +
@@ -173,7 +175,7 @@ dist.merged.all.filt %>% ggplot(aes(x = same.subject, y = value, color = metric)
   annotate("text", x = 2.15, y = 1.04, label = "****", size = 5, color = "black") +
   annotate("segment", x = 1.66, xend = 2.29, y = 1.08, yend = 1.08, 
            linetype = "solid", color = "black", size = 0.75) +
-  annotate("text", x = 1.98, y = 1.09, label = "****", size = 5, color = "black") 
+  annotate("text", x = 1.98, y = 1.09, label = "****", size = 5, color = "black")
 
 # STATS FOR FIGURE 2B
 # diff subject (inter-individual)
@@ -232,24 +234,25 @@ dist.merged.all.filt.timepoints.final <- dist.merged.all.filt.timepoints %>%
   slice(1)
 
 # FIGUERE 2C
-dist.merged.all.filt.timepoints.final %>% 
+fig2c <- dist.merged.all.filt.timepoints.final %>% 
   filter(!metric %in% c("dist.wuni.filt.phf")) %>% 
   ggplot(aes(x = Subject.sample1, y = 1-value, group = interaction(Subject.sample1, metric), color = metric)) +
-  geom_violin(scale = "width", aes(fill=metric), alpha = 0.3, position = position_dodge(width = 0.9)) +
-  geom_boxplot(outlier.shape = NA, width = 0.3, aes(fill = metric), color = "black", position = position_dodge(width = 0.9)) +
-  scale_fill_viridis(discrete = T, begin = 0.1, end = 0.3, labels = labels) +  
-  scale_colour_viridis(discrete = T, begin = 0.1, end = 0.3, labels = labels) +
-  theme_bw() +
-  labs(x = "Individual", y = "Stability\n(1 - distance)", color = "Distance metric", fill = "Distance metric") +
-  annotate("segment", x = 0.75, xend = 1.25, y = 0.86, yend = 0.86, 
-           linetype = "solid", color = "black", size = 0.75) +
-  annotate("text", x = 1, y = 0.87, label = "*", size = 6, color = "black") +
-  annotate("segment", x = 2.75, xend = 3.25, y = 0.86, yend = 0.86, 
-           linetype = "solid", color = "black", size = 0.75) +
-  annotate("text", x = 3, y = 0.87, label = "**", size = 6, color = "black")+
-  annotate("segment", x = 8.75, xend = 9.25, y = 0.86, yend = 0.86, 
-           linetype = "solid", color = "black", size = 0.75) +
-  annotate("text", x = 9, y = 0.87, label = "***", size = 6, color = "black") 
+    geom_violin(scale = "width", aes(fill=metric), alpha = 0.3, position = position_dodge(width = 0.9)) +
+    geom_boxplot(outlier.shape = NA, width = 0.3, aes(fill = metric), color = "black", position = position_dodge(width = 0.9)) +
+    scale_fill_viridis(discrete = T, begin = 0.1, end = 0.3, labels = labels) +  
+    scale_colour_viridis(discrete = T, begin = 0.1, end = 0.3, labels = labels) +
+    theme_bw() +
+    theme(legend.position = "none") +
+    labs(x = "Individual", y = "Stability (1 - distance)", color = "Distance metric", fill = "Distance metric") +
+    annotate("segment", x = 0.75, xend = 1.25, y = 0.86, yend = 0.86, 
+             linetype = "solid", color = "black", size = 0.75) +
+    annotate("text", x = 1, y = 0.87, label = "*", size = 6, color = "black") +
+    annotate("segment", x = 2.75, xend = 3.25, y = 0.86, yend = 0.86, 
+             linetype = "solid", color = "black", size = 0.75) +
+    annotate("text", x = 3, y = 0.87, label = "**", size = 6, color = "black")+
+    annotate("segment", x = 8.75, xend = 9.25, y = 0.86, yend = 0.86, 
+             linetype = "solid", color = "black", size = 0.75) +
+    annotate("text", x = 9, y = 0.87, label = "***", size = 6, color = "black")
 
 # STATS FOR FIGURE 2C
 dist.merged.all.filt.timepoints.final %>% 
@@ -257,3 +260,12 @@ dist.merged.all.filt.timepoints.final %>%
   ungroup() %>% 
   group_by(Subject.sample1) %>% 
   do(w = wilcox.test((1-value) ~ metric, data = ., paired = T)) %>% summarize(Subject.sample1, Wilcox = w$p.value)
+
+### COMBINE ALL FIGURES
+fig2b.2row <- fig2b + guides(fill = guide_legend(nrow = 2, ncol = 2))
+fig2c.2row <- fig2c + guides(fill = guide_legend(nrow = 2, ncol = 2))
+fig2 <- ggarrange(fig2a, 
+          ggarrange(fig2b.2row, fig2c.2row, ncol = 1, common.legend = T, legend = "bottom", labels = c("B", "C")),
+          ncol = 2, labels = "A", widths = c(2, 0.8))
+
+ggsave(file="Figure2.jpg", plot=fig2, width=16, height=8)
