@@ -1,0 +1,3766 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-08-19"
+---
+---
+title: "HMP_2_free_virome"
+author: "Anshul Sinha"
+date: "7/4/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+
+library(rlang)
+library(data.table)
+library(tidyr)
+library(dplyr)
+library(RColorBrewer)
+library(microbiome)
+library(microViz)
+library(phyloseq)
+library(vegan)
+library(tidyverse)
+library(ggplot2)
+library(graphics)
+library(cowplot)
+
+```
+
+
+```{r}
+
+#####READ IN SAMTOOLS COVERAGE####
+
+#Reading in the Sam tools Coverage 
+sam_tools_cov_hmp2_vir1 <- read.table("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_HMP_2/virome_data_08_2024/concatenated_samtools3.tsv", sep="\t", header=TRUE, fill=TRUE, quote="")
+
+
+
+colnames(sam_tools_cov_hmp2_vir1) <- c("contig_name_filename", "startpos", "endpos", "numreads", "covbases", "coverage",  "meandepth", "meanbaseq", "meanmapq")
+
+
+sam_tools_cov_hmp2_vir1 <- sam_tools_cov_hmp2_vir1  %>%
+  separate(contig_name_filename, c("filename", "contigname"), ":")
+tail(sam_tools_cov_hmp2_vir1)
+
+
+
+#remove unecessary part of filename with "sam_tools_cov"
+sam_tools_cov_hmp2_vir1$filename  <- substr(sam_tools_cov_hmp2_vir1$filename, 1, nchar(sam_tools_cov_hmp2_vir1$filename) - 14)
+sam_tools_cov_hmp2_vir1$filename  <- substr(sam_tools_cov_hmp2_vir1$filename, 1, nchar(sam_tools_cov_hmp2_vir1$filename) - 14)
+
+
+
+#####READ MAPPING THRESHOLDS####
+
+
+#first have to read in the checkV ouput for contig length 
+
+checkV_virome <- read.table("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_HMP_2/virome_data_08_2024/quality_summary.tsv", sep = "\t", header = TRUE)
+
+
+
+checkV_virome <- checkV_virome  %>%
+  select(contig_id, contig_length)
+
+
+colnames(checkV_virome) <- c("contigname", "contig_length")
+
+
+#remove leading spaces 
+sam_tools_cov_hmp2_vir1$contigname <- trimws(sam_tools_cov_hmp2_vir1$contigname, "left")
+checkV_virome$contigname <- trimws(checkV_virome$contigname, "left")
+
+
+#remove trailing spaces 
+
+sam_tools_cov_hmp2_vir1$contigname <- trimws(sam_tools_cov_hmp2_vir1$contigname, "left")
+checkV_virome$contigname <- trimws(checkV_virome$contigname, "left")
+
+
+sam_tools_cov_hmp2_vir <- left_join(sam_tools_cov_hmp2_vir1, checkV_virome, by= "contigname")
+
+
+
+#Stockdale cuttoffs - 6,369,157 5 hits before 
+
+sam_tools_cov_hmp2_vir <- sam_tools_cov_hmp2_vir[sam_tools_cov_hmp2_vir$numreads > 10,]
+
+
+#1,680,670 now 
+
+#subset based on contig length
+# calculated breadth of coverage for Bowtie2 mapped reads spanned 50% of contigs <5kb, 30% of contigs ≥5kb and <20kb, or 10% of contigs ≥20kb59,60.
+
+
+#<5kb
+sam_tools_cov_hmp2_vir_5 <- sam_tools_cov_hmp2_vir[sam_tools_cov_hmp2_vir$contig_length < 5000,]
+#12,763 entries before cutoff
+sam_tools_cov_hmp2_vir_5 <- sam_tools_cov_hmp2_vir_5[sam_tools_cov_hmp2_vir_5$coverage > 50,]
+#4,578 after 
+
+
+
+
+
+#between 5 and 20
+sam_tools_cov_hmp2_vir_5_20_1 <- sam_tools_cov_hmp2_vir[sam_tools_cov_hmp2_vir$contig_length >= 5000 ,]
+sam_tools_cov_hmp2_vir_5_20_2 <- sam_tools_cov_hmp2_vir_5_20_1[sam_tools_cov_hmp2_vir_5_20_1$contig_length < 20000,]
+#105,249 before 
+
+ sam_tools_cov_hmp2_vir_5_20_2 <- sam_tools_cov_hmp2_vir_5_20_2[sam_tools_cov_hmp2_vir_5_20_2$coverage > 30,]
+
+ #24,953 after
+ 
+ 
+#Above 20 
+ 
+ #1,562,666
+ sam_tools_cov_hmp2_20 <- sam_tools_cov_hmp2_vir[sam_tools_cov_hmp2_vir$contig_length >= 20000,]
+sam_tools_cov_hmp2_20 <- sam_tools_cov_hmp2_20[sam_tools_cov_hmp2_20$coverage > 10,]
+
+
+#585,639 after 
+
+
+sam_tools_cov_hmp2_vir <- rbind(sam_tools_cov_hmp2_vir_5, sam_tools_cov_hmp2_vir_5_20_2, sam_tools_cov_hmp2_20 )
+#615,170 hits after!
+
+
+
+
+
+
+
+#######iPHoP##########
+
+hmp2_vir_iphop <- read.csv("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_HMP_2/virome_data_08_2024/Host_prediction_to_genome_m90.csv", header = TRUE, sep = ",")
+
+
+#hmp2_vir_iphop <- read.csv("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_HMP_2/free_virome/free_virome_09_23/iPHoP/Host_prediction_to_genome_m90.csv", header = TRUE, sep = ",")
+
+
+
+#Turn this into a data table 
+
+hmp2_vir_iphop <-as.data.table(hmp2_vir_iphop)
+
+hmp2_vir_iphop
+#iPhoP gives several outputs for each contig - filter to give the highest confidence 
+
+#If two values have the same confidence score, it'll just take the top value. 
+
+hmp2_vir_iphop <- hmp2_vir_iphop %>%
+  group_by(Virus) %>%
+  dplyr::slice(which.max(Confidence.score))
+
+
+
+colnames(hmp2_vir_iphop)[1] <- c("contigname")
+
+
+
+
+#Separate taxonomic levels 
+hmp2_vir_iphop <-  hmp2_vir_iphop %>% 
+  separate(Host.taxonomy, into = c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"), sep = ";")
+hmp2_vir_iphop
+
+names(hmp2_vir_iphop)[1] <- "contigname"
+hmp2_vir_iphop
+
+
+hmp2_vir_iphop <- hmp2_vir_iphop %>%
+    mutate(Phylum = recode(Phylum, p__Firmicutes_A = 'p__Firmicutes', p__Firmicutes_B = 'p__Firmicutes', p__Firmicutes_C = 'p__Firmicutes'))
+hmp2_vir_iphop
+
+
+
+
+
+#######Bacphlip##########
+#Read in Bacphlip - for replication cycle  info - not included in paper 
+  
+
+hmp2_bacphlip <-  read.table("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_HMP_2/virome_data_08_2024/dereplicated_phages.tsv", header = TRUE, sep = "\t")
+
+
+#Assign Temperate vs. Virulent based on confidence scores 
+  
+hmp2_bacphlip$Lifestyle <- ifelse(hmp2_bacphlip$Temperate > 0.5, "Temperate", "Virulent")
+hmp2_bacphlip
+colnames(hmp2_bacphlip)[1] <- c("contigname")
+
+
+
+#remove leading spaces 
+sam_tools_cov_hmp2_vir$contigname <- trimws(sam_tools_cov_hmp2_vir$contigname, "left")
+hmp2_bacphlip$contigname <- trimws(hmp2_bacphlip$contigname, "left")
+hmp2_vir_iphop$contigname <- trimws(hmp2_vir_iphop$contigname, "left")
+
+
+#remove trailing spaces 
+
+sam_tools_cov_hmp2_vir$contigname <- trimws(sam_tools_cov_hmp2_vir$contigname, "right")
+hmp2_bacphlip$contigname <- trimws(hmp2_bacphlip$contigname, "right")
+hmp2_vir_iphop$contigname <- trimws(hmp2_vir_iphop$contigname, "right")
+
+
+
+
+
+
+```
+
+
+
+
+```{r}
+#####Join the dataframes#####
+
+#this step will be important for later when I want to filter the sam tools output by "Virulent" or "Temperate"
+
+
+df_hmp_virome_1 <- left_join(sam_tools_cov_hmp2_vir, hmp2_bacphlip , by="contigname")
+
+df_hmp_virome_2 <- left_join(df_hmp_virome_1, hmp2_vir_iphop, by="contigname")
+
+
+
+#metadata
+metadata_df <- read.csv("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_HMP_2/prop_stats_outputs/combined_metadata.csv", header = TRUE)
+metadata_df
+names(metadata_df)[names(metadata_df) == 'Sample_name'] <- 'filename'
+
+
+#remove samples that have no dysbiosis scores- this brings us to 1595 samples 
+metadata_df <- metadata_df[complete.cases(metadata_df$dysbiosis_binary), ]
+
+
+
+
+
+
+
+
+df_hmp_virome <- left_join(df_hmp_virome_1, metadata_df, by="filename")
+
+df_hmp_virome <- df_hmp_virome[complete.cases(df_hmp_virome$dysbiosis_binary), ]
+
+
+unique(df_hmp_virome$Participant.ID)
+tail(df_hmp_virome)
+
+
+#filter for just the Temperate and Virulent Viromes 
+
+
+df_hmp_temperate <- df_hmp_virome[df_hmp_virome$Lifestyle == "Temperate",]
+
+
+df_hmp_virulent <- df_hmp_virome[df_hmp_virome$Lifestyle == "Virulent",]
+
+
+#These can be used to convert to phyloseq OTU tables since they've already been filtered for depth and coverage % cutoffs
+
+
+
+
+```
+
+```{r}
+
+####Calculate Temperate Phage Relative Abundance#### - not included in paper 
+
+#step1 - calculate the mean depth sum for each sample 
+
+library(dplyr)
+ df_sum_sample <- sam_tools_cov_hmp2_vir %>%
+    group_by(filename) %>%
+    summarise(length_normalized_read_count = sum(meandepth))
+
+#step 2 -calcuate the mean depth sum for just the temperate virome and calculate the relab
+
+
+ df_sum_sample_temp <- df_hmp_temperate %>%
+    group_by(filename) %>%
+    summarise(temp_length_normalized_read_count = sum(meandepth))
+
+ #step 3- left join the two above 
+ 
+ temp_rel_ab_df <- left_join(df_sum_sample, df_sum_sample_temp, by = "filename")
+ temp_rel_ab_df$temp_relab <- temp_rel_ab_df$temp_length_normalized_read_count/temp_rel_ab_df$length_normalized_read_count
+temp_rel_ab_df
+
+
+#step 4 left join back with the metadata 
+
+metadata_df <- left_join(metadata_df, temp_rel_ab_df, by = "filename")
+
+
+```
+
+
+
+
+
+
+```{r}
+#unique_sample_names <-  unique(hmp2_free_vir_samplenames$filename)
+
+```
+
+
+
+
+
+
+```{r}
+library(phyloseq)
+library(dplyr)
+
+####Convert Samtools Output to Phyloseq Format#####
+
+#Creating a function that converts the samtools outputs to a matrix that can be used by Phyloseq 
+#option to choose "meandepth" (length normalized read counts) or raw read counts "numreads"
+
+ps_otu_tab_maker <- function(sam_tools_output, reads) {
+  
+  
+  
+  #read in and select necessary columns for ps 
+  
+sam_tools_output_1 <- sam_tools_output %>%
+  select(filename, contigname, reads)
+sam_tools_output_1
+
+
+
+
+if(reads == "meandepth") {
+sam_tools_output_1$meandepth <- round(sam_tools_output_1$meandepth, 0)
+}  
+  else
+{sam_tools_output_1$numreads <- round(sam_tools_output_1$numreads, 0)
+
+}  
+
+
+
+
+
+
+
+#round the decimals - necssary for ps 
+#sam_tools_output_1$meandepth <- round(sam_tools_output_1$meandepth, 0)
+
+#sam_tools_output_1
+
+
+# turn this into a correct format for ps 
+
+
+sam_tools_output_2 <- sam_tools_output_1 %>%
+                 pivot_wider(names_from = filename, values_from = reads)
+
+#replace nas in the df with 0 
+
+sam_tools_output_2[is.na(sam_tools_output_2)] = 0
+#sam_tools_output_2
+
+#make the contig column the rownames
+ sam_tools_output_3 <- sam_tools_output_2 %>%
+  tibble::column_to_rownames("contigname") 
+ 
+# Convert to matrix
+
+sam_tools_matrix <- as.matrix(sam_tools_output_3)
+ sam_tools_matrix
+
+
+}
+
+
+#for whole virome, temperate, and virulent subsets 
+
+otu_tab_whole_vir <-  ps_otu_tab_maker(df_hmp_virome, reads = "meandepth")
+otu_tab_temp_vir <-ps_otu_tab_maker(df_hmp_temperate, reads = "meandepth")
+otu_tab_vir_vir <- ps_otu_tab_maker(df_hmp_virulent, reads = "meandepth")
+
+otu_tab_whole_vir_reads <-  ps_otu_tab_maker(df_hmp_virome, reads = "numreads")
+as.data.frame(head(otu_tab_whole_vir))
+```
+
+
+
+
+```{r}
+
+#####PHYLOSEQ TAXONOMY#####
+
+
+#There are two taxonomy tables I need to create depending on the phyloseq objects I create. Due to limitations in MicroViz, I cant include the IPhoP and BacPhlip Taxonomy info in the same PS object (makes visualization difficult)
+
+#For 3 PS objects (whole virome, temperate, virulent) I'll use the IPhoP taxonomy
+# For the 1 PS object where I compare Virulent and Temperate phage rel abundance/diversity, I'll use the bacphlip taxonomy
+
+#IPHoP only includes the contigs with hits, so I need to first include all contigs by making a list of them using the bacphlip df then left join with the iPHoP df
+
+
+  
+hmp2_vir_names <- hmp2_bacphlip %>%
+  select(contigname)
+hmp2_vir_names
+
+df_hmp_iphop_all_1 <- left_join(hmp2_vir_names, hmp2_vir_iphop, by="contigname")
+
+#also add in the bacphlip info here...  will be useful to include in phyloseq
+
+df_hmp_iphop_all <- left_join(df_hmp_iphop_all_1, hmp2_bacphlip, by="contigname")
+
+
+table(hmp2_bacphlip$Lifestyle)
+
+
+
+# assign first column as rownames
+#rownames(df_hmp_free_iphop_all) <- df_hmp_free_iphop_all[, 1]
+
+# remove first column
+
+#df_hmp_free_iphop_all <-  df_hmp_free_iphop_all[, -1, drop = FALSE]
+
+
+# remove uncessary columns: For IPhop taxa only phyloseq object 
+
+df_hmp_iphop_all_taxa_only <- select(df_hmp_iphop_all, -c("Confidence.score", "Additional.methods", "Virulent", "Temperate", "Lifestyle", "Host.genome"))
+
+df_hmp_iphop_all_taxa_only <- df_hmp_iphop_all_taxa_only %>% 
+tibble::column_to_rownames("contigname")
+
+
+#Breakdown of iPHoP hits 
+
+table(df_hmp_iphop_all_taxa_only$Main.method, useNA = "always")
+table(df_hmp_iphop_all_taxa_only$Family, useNA = "always")
+df_hmp_iphop_all_taxa_only <- as.matrix(df_hmp_iphop_all_taxa_only)
+
+
+# remove uncessary columns: For lifestyle info  phyloseq object (see below) - removing all IPhoP taxonomy 
+
+
+
+df_hmp_iphop_all_lifestyle <- select(df_hmp_iphop_all, -c("Main.method","Confidence.score", "Additional.methods", "Virulent", "Temperate", "Host.genome", "Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"))
+
+df_hmp_iphop_all_lifestyle <- df_hmp_iphop_all_lifestyle %>% 
+tibble::column_to_rownames("contigname")
+
+df_hmp_iphop_all_lifestyle <- as.matrix(df_hmp_iphop_all_lifestyle)
+
+
+
+
+
+
+#now for the X phyloseq object - I want to append the phyla names with the lifestyle info (Ie- Proteobacteria_Virulent) #Do this without appendeing the NA's- important for agglomeration later 
+df_hmp_iphop_all_combined_taxa_names  <- df_hmp_iphop_all
+
+df_hmp_iphop_all_combined_taxa_names$Kingdom <- ifelse(is.na(df_hmp_iphop_all_combined_taxa_names$Kingdom), df_hmp_iphop_all_combined_taxa_names$Kingdom, paste0(df_hmp_iphop_all_combined_taxa_names$Kingdom, sep = "_", df_hmp_iphop_all_combined_taxa_names$Lifestyle))
+
+
+df_hmp_iphop_all_combined_taxa_names$Phylum <- ifelse(is.na(df_hmp_iphop_all_combined_taxa_names$Phylum), df_hmp_iphop_all_combined_taxa_names$Phylum, paste0(df_hmp_iphop_all_combined_taxa_names$Phylum, sep = "_", df_hmp_iphop_all_combined_taxa_names$Lifestyle))
+
+
+
+df_hmp_iphop_all_combined_taxa_names$Class <- ifelse(is.na(df_hmp_iphop_all_combined_taxa_names$Class), df_hmp_iphop_all_combined_taxa_names$Class, paste0(df_hmp_iphop_all_combined_taxa_names$Class, sep = "_", df_hmp_iphop_all_combined_taxa_names$Lifestyle))
+
+
+
+df_hmp_iphop_all_combined_taxa_names$Order <- ifelse(is.na(df_hmp_iphop_all_combined_taxa_names$Order), df_hmp_iphop_all_combined_taxa_names$Order, paste0(df_hmp_iphop_all_combined_taxa_names$Order, sep = "_", df_hmp_iphop_all_combined_taxa_names$Lifestyle))
+
+
+
+df_hmp_iphop_all_combined_taxa_names$Family <- ifelse(is.na(df_hmp_iphop_all_combined_taxa_names$Family), df_hmp_iphop_all_combined_taxa_names$Family, paste0(df_hmp_iphop_all_combined_taxa_names$Family, sep = "_", df_hmp_iphop_all_combined_taxa_names$Lifestyle))
+
+
+
+df_hmp_iphop_all_combined_taxa_names$Genus <- ifelse(is.na(df_hmp_iphop_all_combined_taxa_names$Genus), df_hmp_iphop_all_combined_taxa_names$Genus, paste0(df_hmp_iphop_all_combined_taxa_names$Genus, sep = "_", df_hmp_iphop_all_combined_taxa_names$Lifestyle))
+
+df_hmp_iphop_all_combined_taxa_names$Species <- ifelse(is.na(df_hmp_iphop_all_combined_taxa_names$Species), df_hmp_iphop_all_combined_taxa_names$Species, paste0(df_hmp_iphop_all_combined_taxa_names$Species, sep = "_", df_hmp_iphop_all_combined_taxa_names$Lifestyle))
+
+
+unique(df_hmp_iphop_all_combined_taxa_names$Family)
+
+
+# remove uncessary columns: For IPhop taxa only phyloseq object 
+
+df_hmp_iphop_all_combined_taxa_names <- select(df_hmp_iphop_all_combined_taxa_names, -c("Confidence.score", "Additional.methods", "Virulent", "Temperate", "Lifestyle", "Host.genome"))
+
+
+
+df_hmp_iphop_all_combined_taxa_names
+
+df_hmp_iphop_all_combined_taxa_names <- df_hmp_iphop_all_combined_taxa_names %>% 
+tibble::column_to_rownames("contigname")
+
+df_hmp_iphop_all_combined_taxa_names <- as.matrix(df_hmp_iphop_all_combined_taxa_names)
+
+
+
+
+
+```
+
+
+
+```{r}
+
+####PHYLOSEQ METADATA####
+
+
+hmp2_samplenames <- sam_tools_cov_hmp2_vir %>%
+  select(filename)
+
+unique_sample_names <-  unique(hmp2_samplenames$filename)
+
+unique_sample_names <- as.data.frame(unique_sample_names)
+colnames(unique_sample_names) <- "filename"
+
+
+#now left join
+hmp2_metadata_phylo <- left_join(unique_sample_names,metadata_df, by="filename")
+hmp2_metadata_phylo
+
+#remove those that don't have dysbiosis scores
+
+hmp2_metadata_phylo <- hmp2_metadata_phylo[complete.cases(hmp2_metadata_phylo$dysbiosis_binary), ]
+#Before Creating PS Object, change factor levels 
+
+
+
+
+hmp2_metadata_phylo$dysbiosis_binary <- factor(hmp2_metadata_phylo$dysbiosis_binary, levels=c("No", "Yes"))
+
+hmp2_metadata_phylo$diagnosis.x <- factor(hmp2_metadata_phylo$diagnosis.x, levels=c("nonIBD", "CD", "UC"))
+
+
+hmp2_metadata_phylo.dup <- hmp2_metadata_phylo[!duplicated(hmp2_metadata_phylo$Participant.ID),]
+table(hmp2_metadata_phylo.dup$diagnosis.x)
+
+hist(hmp2_metadata_phylo$length_normalized_read_count)
+
+```
+
+
+```{r}
+#create a phylo tree ! since iPHoP uses a phylo tree
+library(ape)
+
+TREE.gtdb.r202 <- read_tree("/Users/anshul.sinha/Downloads/bac120_r202.tree")
+
+```
+
+
+
+
+
+
+
+```{r}
+####Now Create the 1st Phyloseq Object#### 
+#whole virome - not split by temperate or virulent - This is the PS Object used for most analyses in this manuscript 
+
+
+library("phyloseq")
+OTU_HMP2 = otu_table(otu_tab_whole_vir, taxa_are_rows = TRUE)
+TAX_HMP2 = tax_table(df_hmp_iphop_all_taxa_only)
+META_HMP2 <- sample_data(hmp2_metadata_phylo)
+sample_names(META_HMP2) <- hmp2_metadata_phylo$filename
+physeqhmp2whole_vir_i = phyloseq(OTU_HMP2, TAX_HMP2, META_HMP2)
+physeqhmp2whole_vir_i
+
+
+```
+
+
+
+
+
+```{r}
+####whole virome but with raw reads (not length normalized reads#### 
+
+
+
+library("phyloseq")
+OTU_HMP2_reads = otu_table(otu_tab_whole_vir_reads, taxa_are_rows = TRUE)
+TAX_HMP2_reads = tax_table(df_hmp_iphop_all_taxa_only)
+META_HMP2_reads <- sample_data(hmp2_metadata_phylo)
+sample_names(META_HMP2_reads) <- hmp2_metadata_phylo$filename
+
+
+physeqhmp2whole_vir_i_reads = phyloseq(OTU_HMP2_reads, TAX_HMP2_reads, META_HMP2_reads)
+physeqhmp2whole_vir_i_reads
+
+
+
+
+
+
+
+```
+
+
+
+```{r}
+####Set colours for plotting####
+ dysbiosis_cols <- c("#FF964F", "#BAB86C")
+ diagnosis_cols <- c("#92ddc8", "#5F9EA0", "#FF6961")
+# 
+
+```
+
+
+
+
+
+```{r}
+
+###READ COUNT INFO#####
+
+reads_sample <- readcount(physeqhmp2whole_vir_i)
+
+read.counts.df <- as.data.frame(reads_sample)
+
+rownames_to_column(read.counts.df)
+colnames(read.counts.df)
+
+
+#histogram of counts plot 
+
+ggplot(read.counts.df, aes(x = reads_sample)) + 
+    geom_histogram(color = "black", fill = "indianred", binwidth = 350) 
+
+hist(read.counts.df$reads_sample)
+
+
+
+## Now lets see if sampling depth is sufficient
+
+#step1 calculate Good's coveage
+
+ps_melt_whole_vir <-  ps_melt(physeqhmp2whole_vir_i) 
+
+
+ goods.data <- ps_melt_whole_vir %>% 
+  group_by(Sample) %>%
+  summarise(nseqs= sum(Abundance),
+            n_singletons = sum(Abundance == 1), 
+            goods = 100*(1- n_singletons/nseqs)) 
+
+
+  goods.plot <- goods.data %>% 
+  ggplot(aes(x=nseqs, y=goods)) +
+    geom_point()
+  
+
+goods.data <- na.omit(goods.data)
+
+mean(goods.data$goods)
+
+
+
+#step2 rarefaction curve  
+
+mat <- as(t(otu_table(physeqhmp2whole_vir_i)), "matrix")
+raremax <- min(rowSums(mat))
+
+
+
+random_rows <- sample(nrow(mat), 50)
+matrix.sub <- mat[random_rows, ]
+
+
+subset_mat.pre.filt <- mat[1:50, ]
+
+rarecurve(subset_mat.pre.filt, step = 20, sample = raremax, col = "coral", cex = 0.6, label = FALSE, main="Before Filtering")
+
+
+
+median(goods.data$goods)
+
+
+
+
+
+## Seems like samples below approx 1,500 may not be sufficiently sequenced ###
+# filter samples that have less than 1500 counts 
+
+
+subset_1500 <-  subset_samples(physeqhmp2whole_vir_i, length_normalized_read_count > 1500)
+mat.1500 <- as(t(otu_table(subset_1500)), "matrix")
+
+
+random_rows <- sample(nrow(mat.1500), 50)
+matrix.sub <- mat.1500[random_rows, ]
+
+
+#raremax <- min(rowSums(mat))
+
+
+
+#rarefaction curve when filtered 
+
+rarecurve(matrix.sub, step = 20, col = "coral", cex = 0.6, label = FALSE, main = "After Filtering") 
+
+
+
+#calculate Good's for filtered PS
+
+ps_melt_whole_vir.1500 <-  ps_melt(subset_1500) 
+
+
+ goods.data.1500 <- ps_melt_whole_vir.1500 %>% 
+  group_by(Sample) %>%
+  summarise(nseqs= sum(Abundance),
+            n_singletons = sum(Abundance == 1), 
+            goods = 100*(1- n_singletons/nseqs)) 
+  
+   
+   
+  goods.plot.1500 <- goods.data.1500 %>% 
+  ggplot(aes(x=nseqs, y=goods)) +
+    geom_point() + 
+    ylim(0,100)
+  
+  goods.data.1500 <- na.omit(goods.data.1500)
+
+mean(goods.data.1500$goods)
+median(goods.data.1500$goods)
+
+
+#Plot both Good's 
+
+
+  goods.plot <- goods.data %>% 
+  ggplot(aes(x=nseqs, y=goods)) +
+    geom_point() + 
+        xlab("Number of Length-Normalized Reads") + 
+        ylab("Good's Coverage") +
+        ggtitle("Before Filtering")
+
+  
+  goods.plot.1500 <- goods.data.1500 %>% 
+  ggplot(aes(x=nseqs, y=goods)) +
+    geom_point() + 
+    ylim(0,100) + 
+        xlab("Number of Length-Normalized Reads") + 
+        ylab("Good's Coverage") + 
+        ggtitle("After Filtering")
+
+    
+    
+  
+
+
+goods_plot_combined <- plot_grid(goods.plot, goods.plot.1500)
+
+
+
+
+######COMPARE BREAKDOWN OF SAMPLES BEFORE/AFTER######
+
+#1) Before filtering 
+
+
+#What is breakdown of diagnosis/dysbiosis? 
+
+# Count the number of rows per diagnosis
+whole.vir.sampledata <-  data.frame(sample_data(physeqhmp2whole_vir_i))
+
+
+
+# Count the number of rows per diagnosis
+diagnosis_counts <- whole.vir.sampledata %>%
+  dplyr::count(diagnosis.x)
+  
+  
+
+# Calculate the percentage for labels
+diagnosis_counts <- diagnosis_counts %>%
+  mutate(percentage = n / sum(n) * 100,
+         label = paste0(diagnosis.x, ": ", n, " (", round(percentage, 1), "%)"))
+
+# Create the pie chart with labels
+diag_pie <- ggplot(diagnosis_counts, aes(x = "", y = n, fill = diagnosis.x)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  labs(fill = "Diagnosis", y = "Count", x = "") +
+  theme_void() +  # Removes axes and background
+  theme(legend.position = "right") +
+  geom_text(aes(label = label), position = position_stack(vjust = 0.5), size = 3) + 
+  ggtitle("Before Filtering")
+
+
+# Count the number of rows per dysbiosis
+dybsiosis_counts <- whole.vir.sampledata %>%
+  dplyr::count(dysbiosis_binary)
+
+# Calculate the percentage for labels
+dybsiosis_counts <- dybsiosis_counts %>%
+  mutate(percentage = n / sum(n) * 100,
+         label = paste0(dysbiosis_binary, ": ", n, " (", round(percentage, 1), "%)"))
+
+# Create the pie chart with labels
+dysb_pie <- ggplot(dybsiosis_counts, aes(x = "", y = n, fill = dysbiosis_binary)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  labs(fill = "Dysbiosis", y = "Count", x = "") +
+  theme_void() +  # Removes axes and background
+  theme(legend.position = "right") +
+  geom_text(aes(label = label), position = position_stack(vjust = 0.5), size = 3) + 
+  ggtitle("Before Filtering")
+
+
+
+
+
+#number of reads between groups 
+read.counts.df.merged <- read.counts.df %>%
+  rownames_to_column(var = "filename") 
+
+read.counts.df.merged <- left_join(read.counts.df.merged,hmp2_metadata_phylo, by="filename")
+
+
+#Compare disease status vs. Diagnosis Status 
+
+ggplot(read.counts.df.merged, aes(x=diagnosis.x, y=reads_sample, fill = diagnosis.x))+
+  geom_boxplot() + 
+  theme_minimal()
+
+
+
+#disease 
+kruskal.test(reads_sample ~ diagnosis.x, data = read.counts.df.merged)
+pairwise.wilcox.test(read.counts.df.merged$reads_sample, read.counts.df.merged$diagnosis.x,
+                 p.adjust.method = "BH")
+
+
+
+
+
+
+
+
+#2) Samples after filtering 
+
+
+diagnosis_counts.1500 <- filtered.1500.sampledata %>%
+  dplyr::count(diagnosis.x)
+
+
+# Calculate the percentage for labels
+diagnosis_counts.1500 <- diagnosis_counts.1500 %>%
+  mutate(percentage = n / sum(n) * 100,
+         label = paste0(diagnosis.x, ": ", n, " (", round(percentage, 1), "%)"))
+
+
+# Create the pie chart with labels
+diag_pie_after <- ggplot(diagnosis_counts.1500, aes(x = "", y = n, fill = diagnosis.x)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  labs(fill = "Diagnosis", y = "Count", x = "") +
+  theme_void() +  # Removes axes and background
+  theme(legend.position = "right") +
+   geom_text(aes(label = label), position = position_stack(vjust = 0.5), size = 3) + 
+  ggtitle("After Filtering")
+
+# Count the number of rows per dysbi
+dysbiosis.counts.1500 <- filtered.1500.sampledata %>%
+  dplyr::count(dysbiosis_binary)
+
+
+# Calculate the percentage for labels
+dysbiosis.counts.1500 <- dysbiosis.counts.1500 %>%
+  mutate(percentage = n / sum(n) * 100,
+         label = paste0(dysbiosis_binary, ": ", n, " (", round(percentage, 1), "%)"))
+
+
+# Create the pie chart with labels
+dysb_pie_after <-  ggplot(dysbiosis.counts.1500, aes(x = "", y = n, fill = dysbiosis_binary)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  labs(fill = "Dysbiosis", y = "Count", x = "") +
+  theme_void() +  # Removes axes and background
+  theme(legend.position = "right") +
+   geom_text(aes(label = label), position = position_stack(vjust = 0.5), size = 3) + 
+  ggtitle("After Filtering")
+
+pie_diag_plot_combined <- plot_grid(diag_pie, diag_pie_after)
+pie_diag_plot_combined
+pie_dysb_plot_combined <- plot_grid(dysb_pie, dysb_pie_after, align = "v")
+pie_dysb_plot_combined
+
+all_combined <- plot_grid(diag_pie, diag_pie_after,dysb_pie, dysb_pie_after, align = "v")
+
+
+
+#dysbiosis 
+
+ggplot(read.counts.df.merged, aes(x=dysbiosis_binary, y=reads_sample, fill = dysbiosis_binary))+
+  geom_boxplot() + 
+  theme_minimal()
+
+
+wilcox.test(reads_sample ~ dysbiosis_binary, data = read.counts.df.merged)
+
+
+
+
+
+
+
+#Summary Stats BEFORE#
+filtered.sampledata <-  data.frame(sample_data(physeqhmp2whole_vir_i))
+
+unique.sampledata <- filtered.sampledata[!duplicated(filtered.sampledata$Participant.ID),]
+
+
+length(unique(unique.sampledata$Participant.ID)) #130 individuals before filtering 
+
+table(unique.sampledata$diagnosis.x) #27 non IBD, 65 CD, 38 UC before filtering 
+
+
+
+
+
+#Summary Stats AFTER#
+
+filtered.1500.sampledata <-  data.frame(sample_data(subset_1500))
+
+
+filtered.1500.taxtab <- data.frame(tax_table(subset_1500))
+#get unique number of individuals 
+
+length(unique(filtered.1500.sampledata$Participant.ID)) #115 samples after filtering 
+
+unique.1500 <- filtered.1500.sampledata[!duplicated(filtered.1500.sampledata$Participant.ID),]
+
+table(unique.1500$diagnosis.x) #27 non IBD, 57 CD, 31 UC after filtering 
+
+
+
+length(unique(filtered.1500.sampledata$filename)) #1093 samples after filtering 
+length(unique(read.counts.df$filename)) #1595 samples before
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+
+###How many iPHOP predictions are there in the filtered data?####
+
+
+
+
+df_hmp_virome_merged.2 <- left_join(filtered.1500.df_hmp_virome, hmp2_vir_iphop, by="contigname")
+
+length(unique(df_hmp_virome_merged.2$contigname)) ##3,870 vOTUs in those samples!!!!
+
+#what percentage have a Family level prediction
+
+
+df_hmp_virome_merged.2.not.na <- df_hmp_virome_merged.2[!is.na(df_hmp_virome_merged.2$Family),]
+length(unique(df_hmp_virome_merged.2.not.na$contigname)) ##3,370 vOTUs in those samples!!!!
+
+
+
+3370/3870 
+#what percentage of contigs have a prediction. - 87.08% = 87.1%
+
+#how many PHFs
+length(unique(df_hmp_virome_merged.2.not.na$Family)) ##74
+
+
+```
+
+
+
+
+
+
+```{r}
+####RAREFY AND PERFORM DISTANCE CALCULATIONS####
+
+
+rarefied.reads.1500 <-  rarefy_even_depth(subset_1500, sample.size = min(sample_sums(subset_1500)),
+  rngseed = 1, replace = TRUE, trimOTUs = TRUE, verbose = TRUE)
+
+
+#Make a function that creates a PcoA plot at the vOTU level 
+#Take a phyloseq object and distance matrix and the groups for comparison 
+###USE A RAREFIED PS OBJECT IF USING BRAY 
+#### USE A NON-RAREFIED PS IF USING AITCH
+
+
+
+PCoA_vOTU  <- function(ps, distance, group_var) {
+
+#can directly calculate bray distance from here since we have rarefied 
+ps.fixed <- ps %>%
+ tax_fix(unknowns = "NA")
+  
+
+dist.ps.fixed <- ps.fixed  %>% 
+  dist_calc(distance)
+    
+dist.ps.fixed.ord <- dist.ps.fixed  %>% 
+  ord_calc("PCoA") 
+
+ ord_plot(dist.ps.fixed.ord, color = group_var, size = 2, interactive = FALSE) + 
+   scale_colour_brewer(palette = "Dark2")
+ 
+  
+}
+
+
+#Make a function that creates a PcoA plot at the vOTU level 
+#Take a phyloseq object and distance matrix and the groups for comparison 
+###USE A RAREFIED PS OBJECT IF USING BRAY 
+#### USE A NON-RAREFIED PS IF USING AITCH
+PCoA_PBF  <- function(ps, distance, group_var) {
+
+
+  
+ps1 <- tax_glom(ps, taxrank="Family", NArm = TRUE) 
+
+dist.ps.fixed <- ps1 %>%
+ tax_fix(unknowns = "NA") %>%
+  dist_calc(distance)
+  
+
+  
+
+fixed.ps.dist.ord <- dist.ps.fixed  %>% 
+  ord_calc("PCoA")
+ 
+ ord_plot(fixed.ps.dist.ord, color = group_var, size = 2, interactive = FALSE) + 
+   scale_colour_brewer(palette = "Dark2")
+ 
+ 
+}
+
+
+#use rarefied if using bray, non-rarefied if Aitch
+vOTU_perm  <- function(ps, distance, group_var) {
+
+#can directly calculate bray distance from here since we have rarefied 
+ps.fixed <- ps %>%
+ tax_fix(unknowns = "NA")
+  
+
+dist.ps.fixed <- ps.fixed  %>% 
+  dist_calc(distance)
+    
+  perm <- dist.ps.fixed %>%
+  dist_permanova(
+    seed = 1234, # for set.seed to ensure reproducibility of random process
+    n_processes = 1, n_perms = 999, # you should use at least 999!
+    variables = group_var
+  )
+ 
+ 
+   perm_get(perm) %>% as.data.frame()
+
+ 
+  
+}
+
+
+PBF_perm  <- function(ps, distance, group_var) {
+
+#can directly calculate bray distance from here since we have rarefied 
+
+
+    
+ps1 <- tax_glom(ps, taxrank="Family", NArm = TRUE) 
+
+dist.ps.fixed <- ps1 %>%
+ tax_fix(unknowns = "NA") %>%
+  dist_calc(distance)
+  
+    
+  perm <- dist.ps.fixed %>%
+  dist_permanova(
+    seed = 1234, # for set.seed to ensure reproducibility of random process
+    n_processes = 1, n_perms = 999, # you should use at least 999!
+    variables = group_var
+  )
+ 
+ 
+   perm_get(perm) %>% as.data.frame()
+
+ 
+  
+}
+
+
+
+#vOTU - Bray - Using rarefied DF 
+PCoA_vOTU.Bray.Diagnosis <-   PCoA_vOTU(rarefied.reads.1500, "bray", "diagnosis.x")
+PCoA_vOTU.Bray.Dysbiosis <-   PCoA_vOTU(rarefied.reads.1500, "bray", "dysbiosis_binary")
+
+
+
+#vOTU - Aitchison's - Using non-rarefied DF 
+
+
+PCoA_vOTU.Aitch.Diagnosis <-   PCoA_vOTU(subset_1500, "aitchison", "diagnosis.x")
+PCoA_vOTU.Aitch.Dysbiosis <-   PCoA_vOTU(subset_1500, "aitchison", "dysbiosis_binary")
+
+
+
+
+
+#PBF - Bray - Using rarefied DF 
+PCoA_PBF.Bray.Diagnosis <-   PCoA_PBF(rarefied.reads.1500, "bray", "diagnosis.x")
+PCoA_PBF.Bray.Dysbiosis <-   PCoA_PBF(rarefied.reads.1500, "bray", "dysbiosis_binary")
+
+
+
+
+
+
+
+#PBF -  - Using rarefied DF 
+PCoA_PBF.Aitchison.Diagnosis <-   PCoA_PBF(subset_1500, "aitchison", "diagnosis.x")
+PCoA_PBF.Aitchison.Dysbiosis <-   PCoA_PBF(subset_1500, "aitchison", "dysbiosis_binary")
+
+
+
+
+
+###Bray_Dysbiosis 
+PCoA_vOTU.Bray.Dysbiosis
+PCoA_PBF.Bray.Dysbiosis
+vOTU_perm(rarefied.reads.1500, "bray", "dysbiosis_binary")
+PBF_perm(rarefied.reads.1500, "bray", "dysbiosis_binary")
+
+#Bray_Diagnosis
+PCoA_vOTU.Bray.Diagnosis
+PCoA_PBF.Bray.Diagnosis
+vOTU_perm(rarefied.reads.1500, "bray", "diagnosis.x") 
+PBF_perm(rarefied.reads.1500, "bray", "diagnosis.x")
+
+#Aitch Dysbiosis 
+PCoA_vOTU.Aitch.Dysbiosis
+PCoA_PBF.Aitchison.Dysbiosis
+vOTU_perm(subset_1500, "aitchison", "dysbiosis_binary")
+PBF_perm(subset_1500, "aitchison", "dysbiosis_binary")
+
+
+#Aitch Diagnosis 
+PCoA_vOTU.Aitch.Diagnosis
+PCoA_PBF.Aitchison.Diagnosis
+vOTU_perm(subset_1500, "aitchison", "diagnosis.x")
+PBF_perm(subset_1500, "aitchison", "diagnosis.x")
+
+
+
+
+
+ 
+ 
+ 
+```
+
+
+
+
+```{r}
+
+library(vegan)
+library(multivariance)
+library(viridis)
+
+#####CALCULATE AND COMPARE DISTANCES####
+
+
+#metadata
+metadata_df <- read.csv("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_HMP_2/prop_stats_outputs/combined_metadata.csv", header = TRUE)
+metadata_df
+names(metadata_df)[names(metadata_df) == 'Sample_name'] <- 'filename'
+
+
+#remove samples that have no dysbiosis scores- this brings us to 1595 samples 
+metadata_df <- metadata_df[complete.cases(metadata_df$dysbiosis_binary), ]
+
+
+
+#create a function that generates distance between samples 
+
+dist_calculator <- function(ps, dist, metadata) {
+  
+  
+  
+fixed_taxa <- ps %>%
+ tax_fix(unknowns = "NA")
+
+  
+ dists <- fixed_taxa %>%
+  dist_calc(dist) %>%
+   dist_get() 
+   
+     
+dists <- as.matrix(dists)
+ 
+ melted_vOTU <- dists  %>%
+   melt()
+ 
+ melted_vOTU
+  
+ 
+
+ colnames(melted_vOTU) <- c("sample1", "sample2", "dist.vOTU")
+
+ 
+  
+ fam <- tax_glom(ps, taxrank="Family", NArm = TRUE) 
+fixed_taxa_fam <- fam %>%
+ tax_fix(unknowns = "NA")
+ fam
+ 
+ 
+ 
+ dist_fam <- fam %>%
+  dist_calc(dist) %>%
+   dist_get() 
+ 
+ 
+  dist_fam <- as.matrix(dist_fam)
+
+  melted_PBF <- dist_fam  %>%
+   melt()
+  
+  
+  
+   colnames(melted_PBF) <- c("sample1", "sample2", "dist.pbf")
+
+   
+   
+   dist.merged.all <- left_join(melted_vOTU %>% select(sample1, sample2, dist.vOTU), 
+                         melted_PBF %>% select(sample1, sample2, dist.pbf), 
+                         by = c("sample1" = "sample1", "sample2" = "sample2")) %>% 
+                       left_join(metadata %>% select(Participant.ID, filename), by = c("sample1" = "filename")) %>% 
+                       left_join(metadata %>% select(Participant.ID, filename), by = c("sample2" = "filename")) %>% 
+                        melt()
+
+
+colnames(dist.merged.all) <- c("sample1", "sample2", "subject1", "subject2", "metric", "value")
+dist.merged.all
+
+dist.merged.all$metric <- factor(dist.merged.all$metric, levels = c("dist.vOTU", "dist.pbf"))
+
+#Same subject column to allow to dinstinguish between same v same vs. same vs different comparisons. 
+
+dist.merged.all <- dist.merged.all %>% mutate(same.subject = subject1 == subject2)
+
+
+dist.merged.all
+# Remove rows where 'Value' is equal to 0 because this is same v same comparison  
+dist.merged.all <- dist.merged.all[dist.merged.all$value != 0, ]
+dist.merged.all
+
+
+
+#change names 
+
+
+dist.merged.all$same.subject = as.character(dist.merged.all$same.subject)
+dist.merged.all$metric = as.character(dist.merged.all$metric)
+
+
+
+
+dist.merged.all$same.subject[dist.merged.all$same.subject == "TRUE"] = "Intra-Individual"
+dist.merged.all$same.subject[dist.merged.all$same.subject == "FALSE"] = "Inter-Individual"
+
+
+dist.merged.all$metric[dist.merged.all$metric == "dist.vOTU"] = "vOTU"
+dist.merged.all$metric[dist.merged.all$metric == "dist.pbf"] = "PBF"
+
+colors <- c("#C3B1E1", "#a0d6b4")
+
+
+
+dist.merged.all$metric <- factor(dist.merged.all$metric, levels = c("vOTU", "PBF"))
+
+
+
+dist.merged.all
+#confirm that we have duplicate differences 
+
+dist.merged.all.delete <- dist.merged.all
+#creates a column that merges the sample 1 and 2 cols in alph order, collapses the. sample1vs2 and sample2vs1 should have the same thing 
+dist.merged.all.delete$sorted_pair <- apply(dist.merged.all.delete[, c("sample1", "sample2")], 1, function(x) paste(sort(x), collapse = "_"))
+#test shows that for this pair there are two vOTU and two PBF rows with identical values 
+dist.merged.all.delete.test <- dist.merged.all.delete[dist.merged.all.delete$sorted_pair == "C3001_0_CD_P_C3001_12_CD_P",]
+
+
+# Group by 'sorted_pair' and 'metric' to keep one row for each combination
+
+dist.merged.all.delete <- dist.merged.all.delete %>%
+  group_by(sorted_pair, metric) %>%
+  slice(1) %>%  # Keeps the first row for each group
+  ungroup()
+   
+ 
+dist.merged.all.delete
+}
+
+
+
+
+
+
+#create the distance dataframes for aitchison and bray distance 
+# both are with the 1500 reads cutoff, but for bray the input is rarefied and for aitchison's it is not 
+
+aitchison_distance_df <- dist_calculator(subset_1500, "aitchison" ,metadata_df)
+bray_distance_df <-  dist_calculator(rarefied.reads.1500, "bray" ,metadata_df)
+
+bray_distance_df
+   
+
+
+#same as above but NOT removing duplicates - will be important for stability analyses below 
+dist_calculator.all <- function(ps, dist, metadata) {
+  
+  
+  
+fixed_taxa <- ps %>%
+ tax_fix(unknowns = "NA")
+
+  
+ dists <- fixed_taxa %>%
+  dist_calc(dist) %>%
+   dist_get() 
+   
+     
+dists <- as.matrix(dists)
+ 
+ melted_vOTU <- dists  %>%
+   melt()
+ 
+ melted_vOTU
+  
+ 
+
+ colnames(melted_vOTU) <- c("sample1", "sample2", "dist.vOTU")
+
+ 
+  
+ fam <- tax_glom(ps, taxrank="Family", NArm = TRUE) 
+fixed_taxa_fam <- fam %>%
+ tax_fix(unknowns = "NA")
+ fam
+ 
+ 
+ 
+ dist_fam <- fam %>%
+  dist_calc(dist) %>%
+   dist_get() 
+ 
+ 
+  dist_fam <- as.matrix(dist_fam)
+
+  melted_PBF <- dist_fam  %>%
+   melt()
+  
+  
+  
+   colnames(melted_PBF) <- c("sample1", "sample2", "dist.pbf")
+
+   
+   
+   dist.merged.all <- left_join(melted_vOTU %>% select(sample1, sample2, dist.vOTU), 
+                         melted_PBF %>% select(sample1, sample2, dist.pbf), 
+                         by = c("sample1" = "sample1", "sample2" = "sample2")) %>% 
+                       left_join(metadata %>% select(Participant.ID, filename), by = c("sample1" = "filename")) %>% 
+                       left_join(metadata %>% select(Participant.ID, filename), by = c("sample2" = "filename")) %>% 
+                        melt()
+
+
+colnames(dist.merged.all) <- c("sample1", "sample2", "subject1", "subject2", "metric", "value")
+dist.merged.all
+
+dist.merged.all$metric <- factor(dist.merged.all$metric, levels = c("dist.vOTU", "dist.pbf"))
+
+#Same subject column to allow to dinstinguish between same v same vs. same vs different comparisons. 
+
+dist.merged.all <- dist.merged.all %>% mutate(same.subject = subject1 == subject2)
+
+
+dist.merged.all
+# Remove rows where 'Value' is equal to 0 because this is same v same comparison  
+dist.merged.all <- dist.merged.all[dist.merged.all$value != 0, ]
+dist.merged.all
+
+
+
+#change names 
+
+
+dist.merged.all$same.subject = as.character(dist.merged.all$same.subject)
+dist.merged.all$metric = as.character(dist.merged.all$metric)
+
+
+
+
+dist.merged.all$same.subject[dist.merged.all$same.subject == "TRUE"] = "Intra-Individual"
+dist.merged.all$same.subject[dist.merged.all$same.subject == "FALSE"] = "Inter-Individual"
+
+
+dist.merged.all$metric[dist.merged.all$metric == "dist.vOTU"] = "vOTU"
+dist.merged.all$metric[dist.merged.all$metric == "dist.pbf"] = "PBF"
+
+colors <- c("#C3B1E1", "#a0d6b4")
+
+
+
+dist.merged.all$metric <- factor(dist.merged.all$metric, levels = c("vOTU", "PBF"))
+
+
+
+dist.merged.all
+
+}
+
+
+
+```
+
+```{r}
+####BRAY DISTANCE COMPARISONS####
+
+##FOR the wilcoxon, I'll need to first reshape the data 
+
+bray_distance_df.wider <- bray_distance_df %>%
+  pivot_wider(names_from = metric, values_from = value)
+
+
+
+
+# Now on just intra -comparisons 
+dist.merged.all_intra.bray <- bray_distance_df.wider[bray_distance_df.wider$same.subject == "Intra-Individual",]
+
+#intra wilcox test
+wilcox.test(Pair(vOTU, PBF) ~ 1, data = dist.merged.all_intra.bray)
+
+
+dist.merged.all_inter.bray <- bray_distance_df.wider[bray_distance_df.wider$same.subject == "Inter-Individual",]
+
+#inter wilox test 
+wilcox.test(Pair(vOTU, PBF) ~ 1, data = dist.merged.all_inter.bray)
+
+
+#now plot with significance stars 
+
+
+#removing the test variable x
+
+colors <- c("#C3B1E1", "#a0d6b4")
+
+
+#now plot 
+ bray_distance_df  %>% 
+  ggplot(aes(x = same.subject, y = value, fill = metric)) +
+ geom_violin(scale = "width", aes(fill=metric), alpha = 0.3, position = position_dodge(width = 0.9)) +
+  geom_boxplot(outlier.shape = NA, width = 0.3, aes(fill=metric), color="black", position = position_dodge(width = 0.9)) +
+    annotate("segment", x = 0.75, xend = 1.25, y = 1.09, yend = 1.09, 
+           linetype = "solid", color = "black", size = 1) +
+     annotate("text", x = 1, y = 1.11, label = "****", size = 6, color = "black") +  
+
+       annotate("segment", x = 1.75, xend = 2.25, y = 1.03, yend = 1.03, 
+           linetype = "solid", color = "black", size = 1) +
+     annotate("text", x = 2, y = 1.05, label = "****", size = 6, color = "black") +  
+
+  scale_fill_viridis(discrete = T, begin = 0.1, end = 0.7, labels = labels) +
+  scale_colour_viridis(discrete = T, begin = 0.1, end = 0.7, labels = labels) +
+ # geom_jitter(alpha = 0.05) +
+  #scale_fill_brewer(palette = "Set1") + 
+  #facet_wrap(. ~ same.subject, labeller = label_parsed) + 
+   scale_fill_manual(values = colors) +  
+  scale_color_manual(values = colors) +  
+   labs(x = "Comparison", y = "Distance") +
+   labs(fill = "Distance metric") + 
+   scale_x_discrete(labels = c("Inter-individual (across)", "Intra-individual (within)")) +
+  theme_bw() 
+
+```
+
+
+```{r}
+####Aitchison's DISTANCE COMPARISONS####
+
+
+##FOR the wilcoxon, I'll need to first reshape the data 
+
+aitchison_distance_df.wider <- aitchison_distance_df %>%
+  pivot_wider(names_from = metric, values_from = value)
+
+
+
+
+# Now on just intra -comparisons 
+dist.merged.all_intra.aitch <- aitchison_distance_df.wider[aitchison_distance_df.wider$same.subject == "Intra-Individual",]
+
+#intra wilcox test
+wilcox.test(Pair(vOTU, PBF) ~ 1, data = dist.merged.all_intra.aitch)
+
+
+dist.merged.all_inter.aitch <- aitchison_distance_df.wider[aitchison_distance_df.wider$same.subject == "Inter-Individual",]
+
+#inter wilox test 
+wilcox.test(Pair(vOTU, PBF) ~ 1, data = dist.merged.all_inter.aitch)
+
+
+#now plot with significance stars 
+
+
+#removing the test variable x
+rm(x)
+
+#now plot 
+ aitchison_distance_df  %>% 
+  ggplot(aes(x = same.subject, y = value, fill = metric)) +
+ geom_violin(scale = "width", aes(fill=metric), alpha = 0.3, position = position_dodge(width = 0.9)) +
+  geom_boxplot(outlier.shape = NA, width = 0.3, aes(fill=metric), color="black", position = position_dodge(width = 0.9)) +
+    annotate("segment", x = 0.75, xend = 1.25, y = 105, yend = 105, 
+           linetype = "solid", color = "black", size = 1) +
+     annotate("text", x = 1, y = 108, label = "****", size = 6, color = "black") +  
+
+       annotate("segment", x = 1.75, xend = 2.25, y = 93, yend = 93, 
+           linetype = "solid", color = "black", size = 1) +
+     annotate("text", x = 2, y = 96, label = "****", size = 6, color = "black") +  
+
+  scale_fill_viridis(discrete = T, begin = 0.1, end = 0.7, labels = labels) +
+  scale_colour_viridis(discrete = T, begin = 0.1, end = 0.7, labels = labels) +
+ # geom_jitter(alpha = 0.05) +
+  #scale_fill_brewer(palette = "Set1") + 
+  #facet_wrap(. ~ same.subject, labeller = label_parsed) + 
+   scale_fill_manual(values = colors) +  
+  scale_color_manual(values = colors) +  
+   labs(x = "Comparison", y = "Distance") +
+   labs(fill = "Distance metric") + 
+   scale_x_discrete(labels = c("Inter-individual (across)", "Intra-individual (within)")) +
+  theme_bw() 
+
+```
+
+```{r}
+#plotting prevalence 
+
+
+melted_1500 <- ps_melt(subset_1500)
+
+
+```
+
+
+```{r}
+###CALCULATE STABILITY ####
+
+#need the distance df (without duplicates removed - this will happen as I set sample2>sample1 )
+
+
+bray_distance_df.all <-  dist_calculator.all(rarefied.reads.1500, "bray" ,metadata_df)
+
+
+#add a metadata column for "time point " - converting week number to time point (ie- week 0,2,9 = 1,2,3)
+
+test_metadata <- hmp2_metadata_phylo
+test_metadata <- test_metadata[order(test_metadata$Participant.ID, test_metadata$week_num), ]
+#ordering by week number for each individual 
+#then creating a sequence for the number of time points per individual 
+test_metadata$time_point <- sequence(rle(test_metadata$Participant.ID)$lengths)
+write.csv(test_metadata, "/Users/anshulsinha/Desktop/test/test_meta.csv")
+
+
+
+#Filter for just intra comparisons
+
+dist.merged.all.filt.timepoints <- bray_distance_df.all %>%
+  #Filter for just intra comparisons
+  filter(same.subject == "Intra-Individual") %>%
+  #unclear what this line is doing- ask Michael
+ # filter(!metric %in% c("dist.aitch.filt", "dist.aitch.filt.pbf")) %>%
+  select(sample1, sample2, metric, value) %>%
+  left_join(test_metadata %>% select(time_point, filename, Participant.ID), by = c("sample1" = "filename")) %>%
+  left_join(test_metadata %>% select(time_point, filename, Participant.ID), by = c("sample2" = "filename"), suffix = c(".sample1", ".sample2")) %>%
+  mutate()
+
+length(unique(bray_distance_df$sample1))
+
+length(unique(dist.merged.all.filt.timepoints$sample2))
+
+
+
+
+library(dplyr)
+
+dist.merged.all.filt.timepoints.2 <- dist.merged.all.filt.timepoints %>%
+  mutate(timepoint_after = time_point.sample2 > time_point.sample1) %>%
+  filter(timepoint_after) %>%
+  mutate(timepoint_diff = time_point.sample2 - time_point.sample1) %>%
+  group_by(Participant.ID.sample1, metric, time_point.sample1) %>%
+  arrange(timepoint_diff) %>%
+ filter(timepoint_diff == min(timepoint_diff))   # Keep only the row with the minimum timepoint_diff per group
+
+dist.merged.all.filt.timepoints.2
+
+#Within each time_point.sample1 (group by patient and metric - this will take only the min timepoint_diff per group - allows us to sample "consecutive"time points )
+
+#note that there are several cases where the min_timepoint_diff is > 1 
+#some reasons? 
+  #we filtered out some samples from 
+
+
+
+
+
+
+test_metadata <- hmp2_metadata_phylo
+test_metadata <- test_metadata %>%
+  select(Participant.ID, diagnosis.x)
+
+
+colnames(test_metadata) <- c("Participant.ID.sample1", "Diagnosis")
+
+
+dist.merged.all.filt.timepoints.final_meta <- left_join(dist.merged.all.filt.timepoints.2, test_metadata, by= "Participant.ID.sample1")
+
+dist.merged.all.filt.timepoints.final_meta <- unique(dist.merged.all.filt.timepoints.final_meta)
+
+
+dist.merged.all.filt.timepoints.final_meta %>%
+  filter(!metric %in% c("vOTU")) %>%
+  ggplot(aes(x = Participant.ID.sample1, y = value, group = interaction(Participant.ID.sample1, metric), color = metric)) +
+    geom_violin(scale = "width", aes(fill=metric), alpha = 0.3, position = position_dodge(width = 0.9)) +
+    geom_boxplot(outlier.shape = NA, width = 0.3, aes(fill = metric), color = "black", position = position_dodge(width = 0.9)) +
+    scale_fill_viridis(discrete = T, begin = 0.1, end = 0.3, labels = labels) +
+    scale_colour_viridis(discrete = T, begin = 0.1, end = 0.3, labels = labels) +
+    theme_bw() +
+    labs(x = "Individual", y = "Stability\n(1 - distance)", color = "Distance metric", fill = "Distance metric") +
+    facet_wrap(. ~ Diagnosis)
+
+
+
+
+
+
+
+dist.merged.all.filt.timepoints.final_meta %>%
+  filter(!metric %in% c("PBF")) %>%
+  ggplot(aes(x = Participant.ID.sample1, y = value, group = interaction(Participant.ID.sample1, metric), color = metric)) +
+  geom_violin(scale = "width", aes(fill=metric), alpha = 0.3, position = position_dodge(width = 0.9)) +
+    geom_boxplot(outlier.shape = NA, width = 0.3, aes(fill = metric), color = "black", position = position_dodge(width = 0.9)) +
+    scale_fill_viridis(discrete = T, begin = 0.1, end = 0.3, labels = labels) +
+    scale_colour_viridis(discrete = T, begin = 0.1, end = 0.3, labels = labels) +
+    theme_bw() +
+    labs(x = "Individual", y = "Stability\n(1 - distance)", color = "Distance metric", fill = "Distance metric") +
+     facet_wrap(. ~ Diagnosis)
+
+
+
+
+#Filter for just PBF
+
+dist.merged.all.filt.timepoints.final_meta_PBF <- dist.merged.all.filt.timepoints.final_meta %>%
+  filter(!metric %in% c("vOTU"))
+
+
+#Filter for just vOTU
+
+
+dist.merged.all.filt.timepoints.final_meta_votu <- dist.merged.all.filt.timepoints.final_meta %>%
+  filter(!metric %in% c("PBF"))
+
+
+dist.merged.all.filt.timepoints.final_meta_agg_vOTU <-  aggregate(value ~ Diagnosis, data = dist.merged.all.filt.timepoints.final_meta_votu, FUN = mean)
+dist.merged.all.filt.timepoints.final_meta_agg_PBF <-  aggregate(value ~ Diagnosis, data = dist.merged.all.filt.timepoints.final_meta_PBF, FUN = mean)
+
+
+
+#Filter for just vOTU
+#calculate the Mean value for each individual at the PBF level
+
+
+PBF_grouped <- dist.merged.all.filt.timepoints.final_meta_PBF %>%
+group_by(Participant.ID.sample1) %>%
+    # Calculate the mean of the "Frequency" column for each group
+    summarise_at(vars(value),
+                 list(mean_values = mean))
+
+
+unique_metadata <- unique(test_metadata)
+unique_metadata <- unique_metadata %>%
+  select(Participant.ID.sample1
+, Diagnosis)
+
+
+PBF_grouped <- left_join(PBF_grouped, unique_metadata, by= "Participant.ID.sample1")
+
+
+
+votu_grouped <- dist.merged.all.filt.timepoints.final_meta_votu %>%
+group_by(Participant.ID.sample1) %>%
+    # Calculate the mean of the "Frequency" column for each group
+    summarise_at(vars(value),
+                 list(mean_values = mean))
+
+
+votu_grouped <- left_join(votu_grouped, unique_metadata, by= "Participant.ID.sample1")
+
+#write.csv(PBF_grouped, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_HMP_2/free_virome/free_virome_09_23/diversity_analyses/whole_virome_PBF_instability.csv")
+mean_vals <-  aggregate(mean_values ~ Diagnosis, data = PBF_grouped, FUN = mean)
+
+
+#PLOT
+
+
+
+
+votu_grouped %>%
+  ggplot(aes(x = Diagnosis, y = mean_values, color = Diagnosis)) +
+      geom_boxplot(width = 0.5, colour = "grey35", outlier.shape = NA) +
+      geom_jitter(width = 0.2, alpha = 0.5, aes(color = Diagnosis)) +
+    theme_bw() +
+    labs(x = "Individual", y = "Bray Distance (From Previous Time Point)", color = "Diagnosis Status", fill = "Diagnosis Status") +
+      scale_color_manual(values = diagnosis_cols)
+
+
+
+PBF_grouped %>%
+  ggplot(aes(x = Diagnosis, y = mean_values, color = Diagnosis)) +
+      geom_boxplot(width = 0.5, colour = "grey35", outlier.shape = NA) +
+      geom_jitter(width = 0.2, alpha = 0.5, aes(color = Diagnosis)) +
+    theme_bw() +
+    labs(x = "Individual", y = "Bray Distance (From Previous Time Point)", color = "Diagnosis Status", fill = "Diagnosis Status") +
+      scale_color_manual(values = diagnosis_cols)
+
+
+kruskal.test(mean_values ~ Diagnosis, data = votu_grouped)
+kruskal.test(mean_values ~ Diagnosis, data = PBF_grouped)
+
+pairwise.wilcox.test(votu_grouped$mean_values, votu_grouped$Diagnosis,
+                 p.adjust.method = "BH")
+
+pairwise.wilcox.test(PBF_grouped$mean_values, PBF_grouped$Diagnosis,
+                 p.adjust.method = "BH")
+
+```
+
+
+
+
+```{r}
+######Calculate vOTU and PBF prevalence#####
+
+#NOT USING PHYLOSEQ OBJECT - TAKING ADVANTAGE OF STOCKDALE CUTOFFS FROM OTU_TABLE - PS introduces zeroes 
+#Unlike other sections, I've used a mean depth cutoff > 1 here
+#filter for the samples with more than 1500 counts 
+#get names of those samples 
+
+filtered.1500.sampledata <-  data.frame(sample_data(subset_1500))
+
+sample.names.1500 <- filtered.1500.sampledata$filename
+
+#filter df_hmp_virome for those counts 
+filtered.1500.df_hmp_virome <- df_hmp_virome %>%
+  filter(filename %in% sample.names.1500)
+
+length(unique(filtered.1500.df_hmp_virome$filename)) #sanity check -1093 filenames 
+
+
+
+length(unique(filtered.1500.df_hmp_virome$contigname)) #3,870 contigs total in filtered 1500
+
+
+
+
+#merged with iphop
+df_hmp_virome_merged <- left_join(filtered.1500.df_hmp_virome, hmp2_vir_iphop, by="contigname")
+
+
+
+
+
+
+
+#using the cutoff of >1 mean depth in addition to only keeping samples > 1500 reads, we lose a few contigs  
+#3886 vs. 3862
+df_hmp_virome_merged <- df_hmp_virome_merged[df_hmp_virome_merged$meandepth >1,]
+
+
+ length(unique(df_hmp_virome$contigname)) - length(unique(df_hmp_virome_merged$contigname)) 
+
+ #we only lose 24 - would've expected a bit more 
+ 
+ 
+ #quick check how many of these are NAs
+ df_hmp_virome_merged.dup <- df_hmp_virome_merged[!duplicated(df_hmp_virome_merged$contigname),]
+ 
+ table(df_hmp_virome_merged.dup$Family, useNA = "always")
+ 
+ 
+ 1 - (497/3862)
+ 3862-497
+
+ length(unique(df_hmp_virome_merged$Family, useNA = "never")) 
+ 
+ 
+ 
+
+#prevalence at the vOTU level 
+ #note here that Im calculating based on prevalence at the SAMPLE and the INDIVIDUAL level 
+ 
+ 
+df_hmp_virome_votu_prevalence <- df_hmp_virome_merged %>%
+  group_by(contigname) %>%
+  summarize(sample_count = n_distinct(filename), prevalence = n_distinct(filename) / n_distinct(df_hmp_virome_merged$filename),
+            participant_count = n_distinct(Participant.ID), prevalence_ind = n_distinct(Participant.ID)/ n_distinct(df_hmp_virome_merged$Participant.ID))
+
+
+
+#add a rank column 
+df_hmp_virome_votu_prevalence$rank_prev <- rank(-df_hmp_virome_votu_prevalence$prevalence)
+df_hmp_virome_votu_prevalence$rank_prev_ind <- rank(-df_hmp_virome_votu_prevalence$prevalence_ind)
+
+#prevalence at the PBF level 
+df_hmp_virome_pbf_prevalence <- df_hmp_virome_merged %>%
+  group_by(Family) %>%
+  summarize(sample_count = n_distinct(filename), prevalence = n_distinct(filename) / n_distinct(df_hmp_virome_merged$filename),
+            participant_count = n_distinct(Participant.ID), prevalence_ind = n_distinct(Participant.ID)/ n_distinct(df_hmp_virome_merged$Participant.ID))
+
+
+
+
+#collapse Family NAs as unidentified and then remove 
+df_hmp_virome_pbf_prevalence <- df_hmp_virome_pbf_prevalence %>%
+  mutate(Family = ifelse(is.na(Family), "unidentified", Family)) %>% 
+  filter(Family != "unidentified")
+
+df_hmp_virome_pbf_prevalence
+
+
+
+#add a rank column in descending order 
+df_hmp_virome_pbf_prevalence$rank_prev <- rank(-df_hmp_virome_pbf_prevalence$prevalence)
+df_hmp_virome_pbf_prevalence$rank_prev_ind <- rank(-df_hmp_virome_pbf_prevalence$prevalence_ind)
+
+
+
+
+##### PREVALENCE BY INDIVIDUAL #####
+
+
+
+ # Find the rows where prevalence_ind is close to 0.5
+#at rank_prev, that delineates above and below 0.5 prevalence 
+
+
+threshold <- 0.5
+tolerance <- 0.005
+
+filtered_df.votu <- df_hmp_virome_votu_prevalence %>%
+  filter(prevalence_ind >= (threshold - tolerance) & prevalence_ind <= (threshold + tolerance))
+filtered_df.votu$rank_prev_ind
+
+#at 232 - several contigs have about a  0.5 prevalence 
+
+
+
+threshold <- 0.5
+tolerance <- 0.1
+
+
+
+ 
+
+filtered_df.pbf <- df_hmp_virome_pbf_prevalence %>%
+  filter(prevalence_ind >= (threshold - tolerance) & prevalence_ind <= (threshold + tolerance))
+filtered_df.pbf
+
+
+
+#18 is the delimiter for PBFs 
+
+
+
+#filter a list of those contigs with more than 50% prevalence in the contigs list 
+
+vOTU_list_50_prev <- df_hmp_virome_votu_prevalence[df_hmp_virome_votu_prevalence$rank_prev_ind <= 232,]
+
+236/3862*100
+
+236/3870*100 
+
+
+PBF_list_50_prev <- df_hmp_virome_pbf_prevalence[df_hmp_virome_pbf_prevalence$rank_prev_ind <=18,]
+18/75
+#plot prevalence per individual  
+
+ggplot(df_hmp_virome_votu_prevalence, aes(x = rank_prev_ind, y = prevalence_ind)) +
+    geom_point(size = 0.1) +  
+    geom_jitter() + 
+    labs(x = "Rank", y = "vOTU Prevalence", 
+         title = "vOTU Prevalence Across Individuals") +
+    annotate("segment", x = 233, xend = 233, y = 0, yend = 1, 
+           linetype = "dashed", color = "red", size = 1) +
+    theme_minimal() +
+    theme(axis.text.x = element_blank())  # Removes species labels
+
+
+
+
+
+ggplot(df_hmp_virome_pbf_prevalence, aes(x = rank_prev_ind, y = prevalence_ind)) +
+    geom_point(size = 0.1) + 
+    geom_jitter() +
+    labs(x = "Rank", y = "vOTU Prevalence", 
+         title = "PBF Prevalence Across Individuals") +
+    annotate("segment", x = 18.5, xend = 18.5, y = 0, yend = 1, 
+           linetype = "dashed", color = "red", size = 1) +
+    theme_minimal() +
+    theme(axis.text.x = element_blank())  # Removes species labels
+
+
+#calculate the mean relative abundance of these contigs that are 50% abundant 
+
+df_hmp_virome_merged.votu <- df_hmp_virome_merged %>%
+  group_by(filename) %>%
+  summarize(sum_depth = sum(meandepth), contigname = contigname, meandepth=meandepth)
+
+df_hmp_virome_merged.votu$relative_abundance <- df_hmp_virome_merged.votu$meandepth/df_hmp_virome_merged.votu$sum_depth
+
+
+
+#Now do the same with PBF 
+#Here first make any column that is NA is now changed to unidentified and sum depth 
+#I can play around with how I should/how I should want to 
+df_hmp_virome_merged.pbf.2 <- df_hmp_virome_merged %>%
+  mutate(Family = ifelse(is.na(Family), "unidentified", Family))  %>%
+  group_by(filename) %>%
+    summarize(sum_depth = sum(meandepth), Family = Family, meandepth=meandepth, contigname=contigname)
+
+
+#now group by filename and family so that meandepth per Family is calculated 
+  df_hmp_virome_merged.pbf.1 <- df_hmp_virome_merged.pbf.2 %>% 
+    group_by(filename, Family) %>% 
+    summarize(sum_depth=sum_depth,Family=Family, fam_depth=sum(meandepth))
+
+  
+#It will display this for each contig with a family value - so remove duplicate rows 
+  df_hmp_virome_merged.pbf <- df_hmp_virome_merged.pbf.1[!duplicated(df_hmp_virome_merged.pbf.1),]
+  df_hmp_virome_merged.pbf$relabundance <- df_hmp_virome_merged.pbf$fam_depth/df_hmp_virome_merged.pbf$sum_depth
+  
+  
+  
+###now filter for those contigs above a given rank####
+  df_hmp_virome_merged.votu.filtered.prevalence.1 <- df_hmp_virome_merged.votu %>% 
+    filter(contigname %in% vOTU_list_50_prev$contigname)
+  
+  
+  df_hmp_virome_merged.votu.filtered.prevalence <- df_hmp_virome_merged.votu.filtered.prevalence.1 %>%
+    group_by(filename) %>%
+    summarise(sample_abundance = sum(relative_abundance))
+  
+  
+  checkV_virome
+  
+  
+  
+  PBF_list_50_prev <- PBF_list_50_prev %>%
+  mutate(Family = ifelse(is.na(Family), "unidentified", Family))
+  
+df_hmp_virome_merged.pbf.filtered.prevalence.1 <- df_hmp_virome_merged.pbf %>% 
+    filter(Family %in% PBF_list_50_prev$Family)
+  
+df_hmp_virome_merged.pbf.filtered.prevalence.1 <- df_hmp_virome_merged.pbf.filtered.prevalence.1[df_hmp_virome_merged.pbf.filtered.prevalence.1$Family != "unidentified",]
+
+  
+df_hmp_virome_merged.pbf.filtered.prevalence <- df_hmp_virome_merged.pbf.filtered.prevalence.1 %>%
+group_by(filename) %>%
+summarise(sample_abundance = sum(relabundance))
+    
+
+#adding rows with 0% relative abundance that were filtered out 
+
+#vOTUs
+
+df_hmp_virome_merged.votu.filtered.prevalence #1,085 rows out of 1,093 samples 
+1093-1085 # add 8 rows 
+not.in.df_hmp_virome_merged.votu.filtered.prevalence.1 <- subset(df_hmp_virome_merged, !(filename %in%  df_hmp_virome_merged.votu.filtered.prevalence$filename))
+
+not.in.df_hmp_virome_merged.votu.filtered.prevalence <- unique(not.in.df_hmp_virome_merged.votu.filtered.prevalence.1$filename)
+df.not.in.df.votu <- data.frame(filename = not.in.df_hmp_virome_merged.votu.filtered.prevalence)
+df.not.in.df.votu$sample_abundance <- 0
+
+df_hmp_virome_merged.votu.filtered.prevalence <- rbind(df_hmp_virome_merged.votu.filtered.prevalence,df.not.in.df.votu )
+
+
+#PBFs 
+
+df_hmp_virome_merged.pbf.filtered.prevalence #1,092 rows out of 1,093 samples 
+1093-1092 # add 1 rows 
+not.in.df_hmp_virome_merged.pbf.filtered.prevalence.1 <- subset(df_hmp_virome_merged, !(filename %in%  df_hmp_virome_merged.pbf.filtered.prevalence$filename))
+
+not.in.df_hmp_virome_merged.pbf.filtered.prevalence <- unique(not.in.df_hmp_virome_merged.pbf.filtered.prevalence.1$filename)
+df.not.in.df.pbf <- data.frame(filename = not.in.df_hmp_virome_merged.pbf.filtered.prevalence)
+df.not.in.df.pbf$sample_abundance <- 0
+
+df_hmp_virome_merged.pbf.filtered.prevalence <- rbind(df_hmp_virome_merged.pbf.filtered.prevalence,df.not.in.df.pbf )
+
+
+
+
+
+histogram(df_hmp_virome_merged.pbf.filtered.prevalence$sample_abundance, col="purple")
+histogram(df_hmp_virome_merged.votu.filtered.prevalence$sample_abundance, col="darkgreen")
+median(df_hmp_virome_merged.votu.filtered.prevalence$sample_abundance) #0.569
+median(df_hmp_virome_merged.pbf.filtered.prevalence$sample_abundance) # 0.952
+mean(df_hmp_virome_merged.votu.filtered.prevalence$sample_abundance) #0.540
+mean(df_hmp_virome_merged.pbf.filtered.prevalence$sample_abundance) #0.910
+    
+
+length(PBF_list_50_prev$Family)/length(unique(df_hmp_virome_pbf_prevalence$Family))*100 # 24.32% of PBFs are 50% prevalent or above 
+
+
+length(vOTU_list_50_prev$contigname)/length(unique(df_hmp_virome_votu_prevalence$contigname))*100 # 6.10% of contigs are 50% prevalent or above 
+
+
+
+#Box plot and wilcoxon 
+
+df_hmp_virome_merged.pbf.filtered.prevalence$metric <- "PBF"
+df_hmp_virome_merged.votu.filtered.prevalence$metric <- "vOTU"
+
+merged.prev.df <- rbind(df_hmp_virome_merged.pbf.filtered.prevalence, df_hmp_virome_merged.votu.filtered.prevalence)
+
+merged.prev.df.wider <- merged.prev.df %>% 
+  pivot_wider(names_from = metric, values_from = sample_abundance)
+
+#inter wilox test 
+wilcox.test(Pair(vOTU, PBF) ~ 1, data = merged.prev.df.wider) #p <2E-16
+
+
+
+
+
+
+#plot rel abundance of prevalent features#
+
+ merged.prev.df  %>% 
+  ggplot(aes(x = metric, y = sample_abundance, fill = metric)) +
+geom_violin(scale = "width", aes(fill=metric), alpha = 0.3, position = position_dodge(width = 0.9)) +
+  geom_boxplot(outlier.shape = NA, width = 0.3, aes(fill=metric), color="black", position = position_dodge(width = 0.9)) +
+    annotate("segment", x = 1, xend = 2, y = 1.09, yend = 1.09, 
+          linetype = "solid", color = "black", size = 1) +
+     annotate("text", x = 1.5, y = 1.13, label = "****", size = 6, color = "black") +  
+
+      # annotate("segment", x = 1.75, xend = 2.25, y = 93, yend = 93, 
+       #    linetype = "solid", color = "black", size = 1) +
+     #annotate("text", x = 2, y = 96, label = "****", size = 6, color = "black") +  
+
+  scale_fill_viridis(discrete = T, begin = 0.1, end = 0.7, labels = labels) +
+  scale_colour_viridis(discrete = T, begin = 0.1, end = 0.7, labels = labels) +
+ # geom_jitter(alpha = 0.05) +
+  #scale_fill_brewer(palette = "Set1") + 
+  #facet_wrap(. ~ same.subject, labeller = label_parsed) + 
+   scale_fill_manual(values = colors) +  
+  scale_color_manual(values = colors) +  
+   labs(x = "Comparison", y = "Relative Abundance") +
+   labs(fill = "Distance metric") + 
+   scale_x_discrete(labels = c("PBF", "vOTU")) +
+  theme_bw() 
+
+
+ 
+```
+
+
+
+
+```{r}
+###### Rank prevalence plots base on per sample rather than individual #####
+
+
+
+
+threshold <- 0.5
+tolerance <- 0.001
+
+filtered_df.votu.sample <- df_hmp_virome_votu_prevalence %>%
+  filter(prevalence >= (threshold - tolerance) & prevalence <= (threshold + tolerance))
+#anything less than 99 is > 50% prevalent 
+
+
+
+threshold <- 0.5
+tolerance <- 0.14
+
+
+filtered_df.pbf.sample <- df_hmp_virome_pbf_prevalence %>%
+  filter(prevalence >= (threshold - tolerance) & prevalence <= (threshold + tolerance))
+filtered_df.pbf.sample #anything greater or less than 10 is > 50% prevalent 
+
+
+#filter a list of those contigs with more than 50% prevalence in the contigs list 
+
+vOTU_list_50_prev.sample <- df_hmp_virome_votu_prevalence[df_hmp_virome_votu_prevalence$rank_prev <= 99,]
+
+
+
+PBF_list_50_prev.sample <- df_hmp_virome_pbf_prevalence[df_hmp_virome_pbf_prevalence$rank_prev <= 10,]
+
+
+
+#plot prevalence per sample 
+ggplot(df_hmp_virome_votu_prevalence, aes(x = rank_prev, y = prevalence)) +
+    geom_point(size = 0.1) +  
+    labs(x = "Rank", y = "vOTU Prevalence", 
+         title = "vOTU Prevalence Across Samples") +
+      annotate("segment", x = 100, xend = 100, y = 0, yend = 1, 
+           linetype = "dashed", color = "red", size = 1) +
+    theme_minimal() +
+    theme(axis.text.x = element_blank())  # Removes species labels
+
+
+
+
+
+ggplot(df_hmp_virome_pbf_prevalence, aes(x = rank_prev, y = prevalence)) +
+    geom_point(size = 0.1) +  
+    labs(x = "Rank", y = "vOTU Prevalence", 
+         title = "PBF Prevalence Across Samples") +
+    annotate("segment", x = 11, xend = 11, y = 0, yend = 1, 
+           linetype = "dashed", color = "red", size = 1) +
+    theme_minimal() +
+    theme(axis.text.x = element_blank())  # Removes species labels
+
+
+
+
+#calculate the mean relative abundance of these contigs that are 50% abundant 
+
+  
+#Only difference between this and the calculations per individual is the input list 
+
+
+
+
+  df_hmp_virome_merged.votu.filtered.prevalence.1.sample <- df_hmp_virome_merged.votu %>% 
+    filter(contigname %in% vOTU_list_50_prev.sample$contigname)
+  
+  
+  df_hmp_virome_merged.votu.filtered.prevalence.sample <- df_hmp_virome_merged.votu.filtered.prevalence.1.sample %>%
+    group_by(filename) %>%
+    summarise(sample_abundance = sum(relative_abundance))
+  
+  
+  
+  
+  
+  
+  PBF_list_50_prev.sample <- PBF_list_50_prev.sample %>%
+  mutate(Family = ifelse(is.na(Family), "unidentified", Family))
+  
+df_hmp_virome_merged.pbf.filtered.prevalence.1.sample <- df_hmp_virome_merged.pbf %>% 
+    filter(Family %in% PBF_list_50_prev.sample$Family)
+  
+df_hmp_virome_merged.pbf.filtered.prevalence.1.sample <- df_hmp_virome_merged.pbf.filtered.prevalence.1.sample[df_hmp_virome_merged.pbf.filtered.prevalence.1.sample$Family != "unidentified",]
+
+  
+df_hmp_virome_merged.pbf.filtered.prevalence.sample <- df_hmp_virome_merged.pbf.filtered.prevalence.1.sample %>%
+group_by(filename) %>%
+summarise(sample_abundance = sum(relabundance))
+
+
+
+    
+mean(df_hmp_virome_merged.votu.filtered.prevalence.sample$sample_abundance) #41.2%
+mean(df_hmp_virome_merged.pbf.filtered.prevalence.sample$sample_abundance) #92.1%
+median(df_hmp_virome_merged.votu.filtered.prevalence.sample$sample_abundance) #41.1%
+median(df_hmp_virome_merged.pbf.filtered.prevalence.sample$sample_abundance) #92.09% 
+histogram(df_hmp_virome_merged.pbf.filtered.prevalence.sample$sample_abundance, col="purple") #
+histogram(df_hmp_virome_merged.votu.filtered.prevalence.sample$sample_abundance, col="darkgreen") #
+
+
+
+
+
+length(PBF_list_50_prev.sample$Family)/length(unique(df_hmp_virome_pbf_prevalence$Family))*100 # 13.51% of PBFs are 50% prevalent or above 
+length(vOTU_list_50_prev.sample$contigname)/length(unique(df_hmp_virome_votu_prevalence$contigname))*100 # 2.58% of contigs are 50% prevalent or above 
+
+
+
+#Box plot and wilcoxon 
+
+df_hmp_virome_merged.pbf.filtered.prevalence.sample$metric <- "PBF"
+df_hmp_virome_merged.votu.filtered.prevalence.sample$metric <- "vOTU"
+
+merged.prev.df.sample <- rbind(df_hmp_virome_merged.pbf.filtered.prevalence.sample, df_hmp_virome_merged.votu.filtered.prevalence.sample)
+
+merged.prev.df.wider.sample <- merged.prev.df.sample %>% 
+  pivot_wider(names_from = metric, values_from = sample_abundance)
+
+#inter wilox test 
+wilcox.test(Pair(vOTU, PBF) ~ 1, data = merged.prev.df.wider.sample) #p <2E-16
+
+
+
+
+
+ merged.prev.df.sample  %>% 
+  ggplot(aes(x = metric, y = sample_abundance, fill = metric)) +
+geom_violin(scale = "width", aes(fill=metric), alpha = 0.3, position = position_dodge(width = 0.9)) +
+  geom_boxplot(outlier.shape = NA, width = 0.3, aes(fill=metric), color="black", position = position_dodge(width = 0.9)) +
+    annotate("segment", x = 1, xend = 2, y = 1.09, yend = 1.09, 
+          linetype = "solid", color = "black", size = 1) +
+     annotate("text", x = 1.5, y = 1.13, label = "****", size = 6, color = "black") +  
+
+      # annotate("segment", x = 1.75, xend = 2.25, y = 93, yend = 93, 
+       #    linetype = "solid", color = "black", size = 1) +
+     #annotate("text", x = 2, y = 96, label = "****", size = 6, color = "black") +  
+
+  scale_fill_viridis(discrete = T, begin = 0.1, end = 0.7, labels = labels) +
+  scale_colour_viridis(discrete = T, begin = 0.1, end = 0.7, labels = labels) +
+ # geom_jitter(alpha = 0.05) +
+  #scale_fill_brewer(palette = "Set1") + 
+  #facet_wrap(. ~ same.subject, labeller = label_parsed) + 
+   scale_fill_manual(values = colors) +  
+  scale_color_manual(values = colors) +  
+   labs(x = "Comparison", y = "Relative Abundance") +
+   labs(fill = "Distance metric") + 
+   scale_x_discrete(labels = c("PBF", "vOTU")) +
+  theme_bw() 
+
+
+```
+
+
+
+```{r}
+#####  DESEQ2 FOR DYSBIOTIC SAMPLES #### - formatting samples and data to be included
+
+
+
+#Whole virome here:
+
+#dysbiotic vs. non-dysbiotic 
+#get names of those samples with more than 1500 reads 
+
+filtered.1500.sampledata <-  data.frame(sample_data(subset_1500))
+
+sample.names.1500 <- filtered.1500.sampledata$filename
+
+physeqhmp2whole_vir_i_reads #the ps object where the reads are not length normalized 
+physeqhmp2whole_vir_i_reads #has 1,595 samples 
+
+
+#filter for just the 1,093 above 1500 
+physeqhmp2whole_vir_i_reads.1500 <- prune_samples(sample.names.1500,  physeqhmp2whole_vir_i_reads)
+
+
+
+#now subset the phyloseq object so it only contains patient IDs that have both a dysbiotic and non-dysbiotic sample
+phyloseq_metadata <- hmp2_metadata_phylo 
+
+#filter for samples that just have a "yes" valuue
+yes_ids <- phyloseq_metadata %>% filter(dysbiosis_binary == "Yes") %>% distinct(Participant.ID)
+no_ids <- phyloseq_metadata %>% filter(dysbiosis_binary == "No") %>% distinct(Participant.ID)
+
+
+#Find the common Participant.IDs
+common_ids <- intersect(yes_ids$Participant.ID, no_ids$Participant.ID)
+
+length(common_ids)
+
+
+#Filter the PS object so that we have both dysbiotic and non-dysbiotic indiviuals 
+#Use the ps_object with reads (not length normalized reads)
+filtered_ps <- subset_samples(physeqhmp2whole_vir_i_reads.1500 
+, Participant.ID %in% common_ids)
+
+ 
+
+
+
+
+
+
+#Tax glom- removing NAs - dont really want to include unknowns or single contigs here as they could influence DESEQ2 calc
+#PS melt to generate counts table as df 
+
+
+ tax_glom_fam_reads_deseq <- tax_glom(filtered_ps, taxrank="Family", NArm = TRUE) 
+ 
+
+ 
+####IMPORTANT### Filter out low prevlance PBFs - If I dont do this, DESEQ2 will artificially think that some of the low abundance taxa are DE 
+##Choosing arbitrarily that it must be found in at least 50 % of individuals per above prevalence analyses  - 
+
+#first melt the PS to determine the OTUs that correspond to the PBFs
+ps_melted_filtered <- ps_melt(tax_glom_fam_reads_deseq)
+length(unique(ps_melted_filtered$OTU)) #74 left 
+
+#now take the contignames that are associated with the families that I want to keep 
+ps_melted_filtered.prevalent.PBFs <- ps_melted_filtered %>% 
+  filter(Family %in% PBF_list_50_prev$Family )
+
+length(unique(ps_melted_filtered.prevalent.PBFs$Family)) #18 in here 
+
+
+#now take the OTU names from this 
+ keepTaxa = unique(ps_melted_filtered.prevalent.PBFs$OTU)
+
+
+
+tax_glom_fam_reads_deseq.pruned <- prune_taxa(keepTaxa, tax_glom_fam_reads_deseq)
+ 
+###Went from 74 to 18 taxa 
+
+
+#now also remove samples that have zero counts 
+
+
+
+phyloseq_richness_filter <- function(physeq, mintaxa = 10){
+  sp <- estimate_richness(physeq, measures = "Observed")
+  samples_to_keep <- rownames(sp)[ which(sp$Observed >= mintaxa) ]
+  
+  
+  if(length(samples_to_keep) == 0){
+    stop("All samples will be removed.\n")  
+  }
+  
+  if(length(samples_to_keep) == nsamples(physeq)){
+    cat("All samples will be preserved\n")
+    res <- physeq
+  }
+  
+  if(length(samples_to_keep) < nsamples(physeq)){
+    res <- prune_samples(samples = samples_to_keep, x = physeq)
+  }
+ 
+  return(res)
+}
+
+tax_glom_fam_reads_deseq1 <- phyloseq_richness_filter(tax_glom_fam_reads_deseq.pruned, mintaxa = 1)
+
+#now at 486 samples 
+
+
+
+
+
+fam_reads_counts_deseq <- psmelt(otu_table(tax_glom_fam_reads_deseq1))
+
+
+fam_reads_counts_deseq.meta <- data.frame(filename = unique(fam_reads_counts_deseq$Sample))
+#sanity check - num individuals, diagnosis status, dysb vs. not 
+fam_reads_counts_deseq.meta <- left_join(fam_reads_counts_deseq.meta, hmp2_metadata_phylo, by="filename")
+
+length(unique(fam_reads_counts_deseq.meta$Participant.ID))
+table(fam_reads_counts_deseq.meta$diagnosis.x)
+table(fam_reads_counts_deseq.meta$dysbiosis_binary)
+
+#49 individuals 
+#140 non-IBD samples, 226 CD, 120 UC 
+#371 Non, 115 dysbiotic samples 
+
+
+
+
+#Tax_glom agglomerates at a random OTU - so we'll just have to map the OTU name to its iPHOP designation later 
+
+
+#use tiydrpivot wider to format into a useable matrix 
+
+deseq_matrix_hmp <-  tidyr::pivot_wider(fam_reads_counts_deseq, names_from = OTU, values_from = Abundance)
+deseq_matrix_hmp
+
+#create variable sample_list (will need for later)
+sample_list <- deseq_matrix_hmp$Sample
+length(sample_list)
+
+#switching the columns and rows so that each row is a different contig and each column is a different sample 
+switch_matrix_deseq2_hmp <-  t(deseq_matrix_hmp)
+
+
+#switch_matrix_deseq2_hmp <- as.data.frame(switch_matrix_deseq2_hmp)
+
+
+switch_matrix_deseq2_hmp.1 <- switch_matrix_deseq2_hmp
+#export this 
+write.csv(switch_matrix_deseq2_hmp.1, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_HMP_2/virome_data_08_2024/deseq/matrix.csv") 
+
+
+#dim(switch_matrix_deseq2_hmp)
+
+```
+
+
+
+
+
+
+
+```{r}
+##### Reading in manually edited switched matrix for DESEQ2#### 
+#
+
+raw_counts2_deseq2_hmp <- read.csv("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_HMP_2/virome_data_08_2024/deseq/matrixcopy.csv", check.names = FALSE)
+
+
+#Formatting the rawcount2_deseq2 transposed matrix 
+
+
+
+colnames(raw_counts2_deseq2_hmp)[1] <- "contig_ID"
+
+raw_counts2_deseq2_hmp
+
+
+#replace NA values with 0
+raw_counts2_deseq2_hmp[is.na(raw_counts2_deseq2_hmp)] = 0
+raw_counts2_deseq2_hmp
+
+#naming that column "contig_ID"
+
+contig_ID_deseq2_hmp <-  raw_counts2_deseq2_hmp$contig_ID
+
+#Now I am generating a "sample index" so I can exclude "contig_ID" from our matrix 
+sampleindex_deseq2_hmp <- grepl("\\d", colnames(raw_counts2_deseq2_hmp))
+##of the column names, anything that contains a numeric 
+
+
+#converting to a matrix and only including the sample index columns 
+raw_counts_matrix_deseq2_hmp <- as.matrix(raw_counts2_deseq2_hmp[,sampleindex_deseq2_hmp])
+raw_counts_matrix_deseq2_hmp
+
+
+rownames(raw_counts_matrix_deseq2_hmp) <- contig_ID_deseq2_hmp
+
+
+
+```
+
+
+```{r}
+
+###FORMATTING METADATA FOR DESEQ2#####
+
+metadata_df <- read.csv("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_HMP_2/prop_stats_outputs/combined_metadata.csv", header = TRUE, row.names = 1)
+metadata_df
+names(metadata_df)[names(metadata_df) == 'Sample_name'] <- 'filename'
+
+#remove samples that have no dysbiosis scores- this brings us to 1595 samples 
+metadata_df <- metadata_df[complete.cases(metadata_df$dysbiosis_binary), ]
+
+
+#Need to filter out samples that DONT have both a yes and no 
+
+# Filter the PS object so that we have  both  #Use the ps_object with reads (not length normalized reads)
+
+
+#changing all columns to factor 
+sample_mapping_hmp2 <- mutate_if(metadata_df, is.character, as.factor)
+sample_mapping_hmp2 <- mutate_if(metadata_df, is.integer, as.factor)
+sample_mapping_hmp2 
+
+# Filter again to filter out any samples that have 0 counts or are in the common_ids list created earlier that includes patients with dysb and non-dysb valuees 
+
+sample_mapping_hmp2_filtered <- sample_mapping_hmp2 %>% filter(filename %in% sample_list)
+
+
+sample_mapping_hmp2_filtered <-  sample_mapping_hmp2_filtered %>% 
+    select(filename, diagnosis.x, dysbiosis_binary, Participant.ID) %>% 
+     remove_rownames  %>%
+    column_to_rownames(var = "filename")
+
+
+#Put the columns of the count data in the same order as rows names of the sample mapping, then make sure it worked (TRUE)
+
+raw_counts_matrix_deseq2_hmp <- raw_counts_matrix_deseq2_hmp[, unique(rownames(sample_mapping_hmp2_filtered))]
+
+head(raw_counts_matrix_deseq2_hmp)
+all(colnames(raw_counts_matrix_deseq2_hmp) == rownames(sample_mapping_hmp2_filtered))
+
+
+
+sample_mapping_hmp2_filtered
+
+length(unique(sample_mapping_hmp2_filtered$Participant.ID)) #comparing the 49 individuals who have dysbiotic and non samples 
+
+
+```
+
+
+
+```{r}
+library(DESeq2)
+####Run DESEQ2####
+#Use a simple paired design 
+
+
+deseq2Data_hmp2 <- DESeqDataSetFromMatrix(countData=raw_counts_matrix_deseq2_hmp, colData=sample_mapping_hmp2_filtered, design = ~ Participant.ID + dysbiosis_binary)
+
+
+```
+
+```{r}
+###Estimate size factors to deal with zeroes####
+
+dds_hmp2 <-estimateSizeFactors(deseq2Data_hmp2, type = "poscounts")
+dds_hmp2 <- DESeq(dds_hmp2)
+```
+
+
+```{r}
+
+###Results####
+
+
+resultsNames(dds_hmp2)
+deseq2_results_hmp_2 <-  results(dds_hmp2, contrast=list("dysbiosis_binary_Yes_vs_No"))
+
+
+
+deseq2_results_hmp_2 <- as.data.frame(deseq2_results_hmp_2)
+
+deseq2_results_hmp_2 <- deseq2_results_hmp_2 %>% 
+rownames_to_column(var = "contigname")
+deseq2_results_hmp_2
+
+
+deseq2_results_hmp_2_comb <- left_join(deseq2_results_hmp_2, hmp2_vir_iphop, by= "contigname")
+
+
+#significant values 
+
+deseq2_results_hmp_2_sig <- subset(deseq2_results_hmp_2_comb, padj < 0.05 & (log2FoldChange > 1 | log2FoldChange < -1))
+
+
+deseq2_results_hmp_2_sig <- as.data.frame(deseq2_results_hmp_2_sig)
+
+
+
+
+
+ library(EnhancedVolcano)
+
+#in order to plot the cutoff of padj and not p-value, we need to give the pvalue column in the df the values from the padj column 
+
+
+hmp_2_combined_deseq1_res2_df_changed <- deseq2_results_hmp_2_comb
+hmp_2_combined_deseq1_res2_df_changed$pvalue <- hmp_2_combined_deseq1_res2_df_changed$padj
+
+
+keyvals_col_con_hmp2 <- ifelse(
+    hmp_2_combined_deseq1_res2_df_changed$log2FoldChange < -1 & hmp_2_combined_deseq1_res2_df_changed$padj < 0.05, 'orange',
+      ifelse(hmp_2_combined_deseq1_res2_df_changed$log2FoldChange > 1 & hmp_2_combined_deseq1_res2_df_changed$padj < 0.05, 'darkgreen',
+        'light grey'))
+  keyvals_col_con_hmp2[is.na(keyvals_col_con_hmp2)] <- 'light grey'
+  names(keyvals_col_con_hmp2)[keyvals_col_con_hmp2 == 'darkgreen'] <- 'Enriched in Dysbiotic Samples'
+  names(keyvals_col_con_hmp2)[keyvals_col_con_hmp2 == 'light grey'] <- 'Non-significant'
+  names(keyvals_col_con_hmp2)[keyvals_col_con_hmp2 == 'orange'] <- 'Depleted in Dysbiotic Samples'
+
+EV_col_con <- EnhancedVolcano(hmp_2_combined_deseq1_res2_df_changed, lab=NA , x = 'log2FoldChange',
+    y = 'pvalue',  pCutoff = 0.05, cutoffLineWidth = 0.1, selectLab = rownames(hmp_2_combined_deseq1_res2_df_changed)[which(names(keyvals_col_con_hmp2) %in% c('Over-Abundant in Colitis', 'Over-Abundant in Control'))], pointSize = 2, gridlines.major = FALSE, gridlines.minor = FALSE, colCustom = keyvals_col_con_hmp2,  legendPosition = 'right', legendLabSize = 12,legendIconSize = 4.0, title = "", axisLabSize = 15,    subtitle = "", caption = "", xlab = expression(Log[2]~"Fold-Change")
+)
+
+EV_col_con
+
+
+edit_names_deseq <-  deseq2_results_hmp_2_comb[deseq2_results_hmp_2_comb$Family != "f__",]
+edit_names_deseq$Family <- gsub("^.{0,3}", "", edit_names_deseq$Family)
+
+
+   
+# filter dataframe to get data to be highligheted
+edit_names_deseq_highlight <- edit_names_deseq %>% 
+             filter(padj<0.05)
+
+
+ deseq.lfc.plot <-edit_names_deseq %>%
+  ggplot(aes(x = log2FoldChange, reorder(Family, -log2FoldChange))) +
+  geom_vline(xintercept = 0) +
+  geom_point(aes(color = case_when(log2FoldChange > 1 & padj < 0.05 ~ "darkgreen", 
+                                   log2FoldChange < -1 &  padj < 0.05 ~ "orange",
+                                  TRUE ~ "grey" )), size = 5) +
+  geom_point(data = . %>% filter(padj < 0.05 & log2FoldChange > 1 | padj < 0.05 & log2FoldChange < -1 ), size = 8, color = "darkred", shape = 1) +
+  theme(
+    axis.text.y = element_text(face = "italic", size = 10),
+    axis.title.x = element_text(face = "italic")
+  ) +
+  scale_x_continuous(
+    name = expression(Log[2] ~ " Fold Change")
+  ) +
+  scale_color_manual(
+    values = c("darkgreen", "orange", "darkred"),
+    breaks = c("darkgreen", "orange"),
+    labels = c("Below 0", "Above 0")
+  ) +
+  guides(color = "none")  # Remove the legend
+
+
+ 
+sig_names_families2 <- edit_names_deseq %>% 
+             filter(padj<0.05 & (log2FoldChange >= 1 | log2FoldChange <= -1))
+
+ 
+sig_names_families <- edit_names_deseq %>% 
+             filter(padj<0.05 & (log2FoldChange >= 1 | log2FoldChange <= -1))
+
+sig_names_families <- sig_names_families$Family
+
+```
+
+
+
+  
+  
+  
+
+
+
+```{r}
+####AMG Analyses#####
+
+
+
+#will need just the samples that remained after filtering out the < 1,500 read samples 
+df_hmp_virome_merged.2 <- left_join(filtered.1500.df_hmp_virome, hmp2_vir_iphop, by="contigname")
+df_hmp_virome_merged.2.iphop <- df_hmp_virome_merged.2[!is.na(df_hmp_virome_merged.2$Family),]
+
+length(unique(df_hmp_virome_merged.2$contigname))
+length(unique(df_hmp_virome_merged.2.iphop$contigname))
+
+
+df_hmp_virome_merged.2.names <- unique(df_hmp_virome_merged.2$contigname)
+
+
+
+#3886 contigs - need to filter to get the 3,870 
+
+df_hmp_iphop_all.analyses.one <-   df_hmp_iphop_all_1
+df_hmp_iphop_all.analyses <- df_hmp_iphop_all.analyses.one %>% 
+  filter(contigname %!in% df_hmp_virome_merged.2.names)
+
+
+
+
+
+#read in table of AMGs 
+AMGs <- read.table("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_HMP_2/virome_data_08_2024/AMGs/concatenated_AMGs.tsv", sep = "\t", quote = "", header = TRUE)
+
+#create new column to indicate where the contig came from 
+
+AMGs <- AMGs %>%
+  mutate(participant.ID = sub("^[^_]*_[^_]*_[^_]*_([^\\.]+)\\..*$", "\\1", filename))
+
+#now append to the contig name to be consistent with contig naming format 
+
+AMGs$contigname <- paste(AMGs$participant.ID,"_",AMGs$scaffold, sep = "")
+
+#replace whitespace with underscores for consistency 
+AMGs$contigname <- gsub(" ", "_", AMGs$contigname)
+
+
+#now filter so I only include the 3,870 contigs I care about - ones with iphop assignments 
+length(unique(df_hmp_virome_merged.2.iphop$contigname)) #3,370
+
+iphop.names <- df_hmp_virome_merged.2.iphop$contigname
+
+
+#filter to just contain those names 
+AMGs$contigname 
+
+AMGs.filtered <- AMGs %>% 
+  filter(contigname %in% iphop.names)
+
+length(unique(AMGs.filtered$participant.ID)) 
+
+
+length(unique(AMGs.filtered$protein)) 
+
+#left with only 1,789 rows - suggests that not every contig has an AMG - sanity check to confirm that I am not missing anything 
+
+
+
+'%!in%' <- function(x,y)!('%in%'(x,y))
+
+
+AMGs.filtered.out <- AMGs %>% 
+  filter(contigname %!in% iphop.names)
+
+
+#read in C3001 VIBRANT file 
+
+AMGs.C3001 <- read.table("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_HMP_2/virome_data_08_2024/AMGs/VIBRANT_AMG_individuals_C3001.contigs.tsv", sep = "\t", quote = "", header = TRUE)
+length(unique(AMGs.C3001$scaffold))
+#90 AMGs from 64 contigs - from C3001 log - 716 phages total - means that not all phages have a detected AMG - our completeness cutoff means that we are keeping a higher proportion 
+
+
+
+
+
+#back to our filtered data
+
+length(unique(AMGs.filtered$scaffold))
+
+#1,089 distinct contigs with AMGs (1,789 - indicating some contigs have multiple AMGs)
+
+
+#A PBF sanity check from the iphop output 
+
+
+#3886 contigs - need to filter to get the 3,870 
+
+df_hmp_iphop_all.analyses.one <-   df_hmp_iphop_all_1
+df_hmp_iphop_all.analyses.one
+
+df_hmp_iphop_all.analyses <- df_hmp_iphop_all.analyses.one %>% 
+  filter(contigname %in% df_hmp_virome_merged.2.names)
+
+
+
+length(df_hmp_iphop_all.analyses$contigname) #3,870
+
+df_hmp_iphop_all.analyses.filtered <- df_hmp_iphop_all.analyses
+
+
+
+#if "NA" change to contig name 
+df_hmp_iphop_all.analyses$Family <- ifelse(is.na(df_hmp_iphop_all.analyses$Family), df_hmp_iphop_all.analyses$contigname, df_hmp_iphop_all.analyses$Family)
+
+
+na_count <- sum(is.na(df_hmp_iphop_all.analyses.filtered$Family))
+
+#500 NAs 
+
+3870-500  #3,370 have PHF membership 
+
+
+#of the remaining 
+df_hmp_iphop_all.analyses.2 <- df_hmp_iphop_all.analyses.filtered
+
+df_hmp_iphop_all.analyses.2 <- df_hmp_iphop_all.analyses.2[!is.na(df_hmp_iphop_all.analyses.2$Family), ]
+
+
+length(unique(df_hmp_iphop_all.analyses.2$Family)) #3,370 PHFs into 74 PBFs 
+
+df_hmp_iphop_all.analyses.2.grouped <- df_hmp_iphop_all.analyses.2 %>% 
+  group_by(Family) %>% 
+  summarise(contig_count = n_distinct(contigname))
+
+
+df_hmp_iphop_all.analyses.2.grouped
+
+mean(df_hmp_iphop_all.analyses.2.grouped$contig_count)
+sd(df_hmp_iphop_all.analyses.2.grouped$contig_count)
+
+#plot number of contigs/PBF
+
+
+ggplot(df_hmp_iphop_all.analyses.2.grouped, aes(x = reorder(Family,-contig_count) , y = contig_count)) +
+    geom_point(size = 0.1) +  
+    geom_jitter() + 
+    labs(x = "PBF", y = "Contigs per PBF", 
+         title = "Contigs per PBF") +
+    annotate("segment", x = 11.5, xend = 11.5, y = 0, yend = 900, 
+          linetype = "dashed", color = "red", size = 0.25) +
+    theme_minimal() +
+    theme(axis.text.x = element_blank())  # Removes species labels
+
+
+#seems like there is a delination at number 11 (85 vs 37)
+
+df_hmp_iphop_all.analyses.2.grouped %>% 
+  arrange(-contig_count)
+
+#filter for top 11 
+
+df_hmp_iphop_all.analyses.2.grouped.11 <-  df_hmp_iphop_all.analyses.2.grouped[df_hmp_iphop_all.analyses.2.grouped$contig_count > 37,]
+
+
+
+
+
+
+##BACK TO AMGs##
+
+
+AMGs.filtered
+
+AMGs.filtered$contigname <- gsub(" ", "_", AMGs.filtered$contigname)
+
+#Read in the file from the VIBRANT github that maps the KOs to their pathway 
+AMG.mapper <- read.table("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_HMP_2/virome_data_08_2024/AMGs/VIBRANT_KEGG_pathways_summary.tsv", quote = "", sep = "\t", header = TRUE)
+
+
+#give each Entry..map. a new row with KO 
+
+
+AMG.mapper.1 <- AMG.mapper %>%
+  separate_rows(KOs, sep = "~")
+
+table(AMG.mapper.1$Metabolism)
+
+
+# I can now filter out the Entry map. and Pathway column to simplify things 
+
+AMG.mapper.2 <- AMG.mapper.1 %>% 
+  select(Metabolism, KOs)
+
+#remove duplicate rows - some should exist because the same KOs may belong to diff Pathway and Entry Maps, but the same Metabolism 
+
+AMG.mapper.3 <- AMG.mapper.2[!duplicated(AMG.mapper.2), ]
+
+table(AMG.mapper.3$Metabolism)
+
+length(unique(AMG.mapper.3$KOs))
+
+
+#there are 5,625 unique KOs, despite 6,547 rows
+
+#identify KOs that are found across multiple categories 
+AMG.mapper.3.mapping.multiples <- AMG.mapper.3 %>% 
+  group_by(KOs) %>% 
+  summarise(metabolism_count=n_distinct(Metabolism))
+
+AMG.mapper.4.mapping.multiples <- AMG.mapper.3.mapping.multiples[AMG.mapper.3.mapping.multiples$metabolism_count > 1,]
+#678 KOs with multiple metabolism categories 
+
+
+#are any of these in our AMG df?
+
+AMGs.filtered.test <- AMGs.filtered %>% 
+  filter(AMG.KO %in% AMG.mapper.4.mapping.multiples$KOs)
+
+length(unique(AMGs.filtered.test$AMG.KO)) #89 KOs with multiple - making up 265 rows 
+
+
+AMGs.filtered.test2 <- AMGs.filtered.test %>%
+group_by(AMG.KO) %>% 
+  summarise(contigcount=n_distinct(contigname))
+#can see some of these 89 KOs are found in multiple contigs
+
+
+
+
+#What I will do is create a column that gives a combined Metabolism KO value 
+AMG.mapper.3$KO_metabolism <- paste(AMG.mapper.3$Metabolism, AMG.mapper.3$KOs, sep="_")
+
+
+
+#assign rownames to keep track 
+
+AMGs.filtered$rownumbers <- 1:nrow(AMGs.filtered)
+
+
+AMGs.filtered$KOs <- AMGs.filtered$AMG.KO
+
+
+
+AMGs.filtered.joined <- left_join(AMGs.filtered, AMG.mapper.3, by="KOs")
+
+
+
+#can see that there are now 2,129 compared to 1,790 earlier 
+
+#seems like less rows than I wouldve expcted
+
+
+length(AMGs.filtered.joined.test)
+
+AMGs.filtered.joined.test <- AMGs.filtered.joined %>% 
+  filter(KOs %in% AMG.mapper.4.mapping.multiples$KOs) #this has 605 rows
+
+
+AMGs.filtered.joined.test2 <- AMGs.filtered %>% 
+  filter(KOs %in% AMG.mapper.4.mapping.multiples$KOs) #this has 265 rows
+
+
+AMGs.filtered.joined.test3 <- AMGs.filtered.joined %>% #in the joined df - how many KOs don't have multiple
+  filter(KOs %!in% AMG.mapper.4.mapping.multiples$KOs) #this has 1,524 rows
+
+
+#reminder - #89 KOs with multiple metabolism categories - making up 265 rows 
+
+1524 + 265 #1,789
+
+1524 + 605 # 2,129 This number accounts for the  times the 89 KOs  were counted multiple times 
+
+length(unique(AMGs.filtered.joined$contigname)) # comes from 1,089 unique contigs 
+#some contigs contain multiple AMGs and some AMGs belong to multiple categories 
+
+
+#now left join with iphop 
+
+AMGs.filtered.joined.iphop <- left_join(AMGs.filtered.joined, hmp2_vir_iphop, by="contigname")
+
+
+#how many PHFs carry an AMG 
+
+length(unique(AMGs.filtered.joined.iphop$Family)) 45/74
+
+
+
+##AMG distribution##
+
+#Overall distribution 
+#create function that gives a distribution of AMGs - can filter for specific PHFs
+AMG_distribution <- function(df) {
+  
+AMGs.filtered.joined.iphop.grouped <- df %>% 
+  group_by(Metabolism) %>% 
+  summarize(count=n_distinct(protein))
+
+#note that Im counting distinct proteins rather than contigs in case a scaffold contains two KOs from the same category o
+
+AMGs.filtered.joined.iphop.grouped <- AMGs.filtered.joined.iphop.grouped[!is.na(AMGs.filtered.joined.iphop.grouped$Metabolism),]
+AMGs.filtered.joined.iphop.grouped$Metabolism <- gsub('"', '', AMGs.filtered.joined.iphop.grouped$Metabolism)
+
+  AMGs.filtered.joined.iphop.grouped
+}
+
+
+
+
+
+
+
+###PLOTTING OVERALL AMGS DISTRIBUTION#####
+overall_AMG_distribution <-  AMG_distribution(AMGs.filtered.joined.iphop)
+ggplot(overall_AMG_distribution, aes(x = Metabolism, y = count, fill = Metabolism)) +
+  geom_bar(stat = "identity", width = 1) + 
+  theme(axis.text.x = element_blank())
+
+
+
+####PLOTTING THE ENTEROBACTERIACEAE DISTRIBUTION#####
+
+AMGs.filtered.joined.iphop_entero <- AMGs.filtered.joined.iphop[AMGs.filtered.joined.iphop$Family == "f__Enterobacteriaceae",]
+entero_AMG_distribution <-  AMG_distribution(AMGs.filtered.joined.iphop_entero)
+
+
+ggplot(entero_AMG_distribution, aes(x = Metabolism, y = count, fill = Metabolism)) +
+  geom_bar(stat = "identity", width = 1) + 
+  theme(axis.text.x = element_blank()) +
+  ggtitle("Enterobacteriaceae")
+
+
+####PLOTTING THE Ruminococcacaea DISTRIBUTION#####
+
+AMGs.filtered.joined.iphop_rumino <- AMGs.filtered.joined.iphop[AMGs.filtered.joined.iphop$Family == "f__Ruminococcaceae",]
+rumino_AMG_distribution <-  AMG_distribution(AMGs.filtered.joined.iphop_rumino)
+
+
+ggplot(rumino_AMG_distribution, aes(x = Metabolism, y = count, fill = Metabolism)) +
+  geom_bar(stat = "identity", width = 1) + 
+  theme(axis.text.x = element_blank()) +
+  ggtitle("Ruminococcaceae")
+
+
+####PLOTTING THE CAG-74 DISTRIBUTION#####
+AMGs.filtered.joined.iphop_cag_74 <- AMGs.filtered.joined.iphop[AMGs.filtered.joined.iphop$Family == "f__CAG-74",]
+cag74_AMG_distribution <-  AMG_distribution(AMGs.filtered.joined.iphop_cag_74)
+
+
+ggplot(cag74_AMG_distribution, aes(x = Metabolism, y = count, fill = Metabolism)) +
+  geom_bar(stat = "identity", width = 1) + 
+  theme(axis.text.x = element_blank()) + 
+  ggtitle("CAG-74")
+
+
+
+####PLOTTING THE Acidaminococcaceae DISTRIBUTION#####
+
+AMGs.filtered.joined.iphop_acidamino <- AMGs.filtered.joined.iphop[AMGs.filtered.joined.iphop$Family == "f__Acidaminococcaceae",]
+acidamino_AMG_distribution <-  AMG_distribution(AMGs.filtered.joined.iphop_acidamino)
+
+
+ggplot(acidamino_AMG_distribution, aes(x = Metabolism, y = count, fill = Metabolism)) +
+  geom_bar(stat = "identity", width = 1) + 
+  theme(axis.text.x = element_blank()) + 
+  ggtitle("Acidaminococcaceae")
+
+
+####PLOTTING THE Acutalibacteraceae DISTRIBUTION#####
+
+AMGs.filtered.joined.iphop_acut <- AMGs.filtered.joined.iphop[AMGs.filtered.joined.iphop$Family == "f__Acutalibacteraceae",]
+acut_AMG_distribution <-  AMG_distribution(AMGs.filtered.joined.iphop_acut)
+
+
+ggplot(acut_AMG_distribution, aes(x = Metabolism, y = count, fill = Metabolism)) +
+  geom_bar(stat = "identity", width = 1) + 
+  theme(axis.text.x = element_blank())  + 
+  ggtitle("Acutalibacteraceae")
+
+
+
+####PLOTTING THE Lachnospiraceae DISTRIBUTION#####
+
+AMGs.filtered.joined.iphop_lachno <- AMGs.filtered.joined.iphop[AMGs.filtered.joined.iphop$Family == "f__Lachnospiraceae",]
+lachno_AMG_distribution <-  AMG_distribution(AMGs.filtered.joined.iphop_lachno)
+
+
+ggplot(lachno_AMG_distribution, aes(x = Metabolism, y = count, fill = Metabolism)) +
+  geom_bar(stat = "identity", width = 1) + 
+  theme(axis.text.x = element_blank()) + 
+  ggtitle("Lachnospiraceae")
+
+
+####PLOTTING THE Bacteriodaceae DISTRIBUTION#####
+
+AMGs.filtered.joined.iphop_bacteroid <- AMGs.filtered.joined.iphop[AMGs.filtered.joined.iphop$Family == "f__Bacteroidaceae",]
+bacterioid_AMG_distribution <-  AMG_distribution(AMGs.filtered.joined.iphop_bacteroid)
+
+
+ggplot(bacterioid_AMG_distribution, aes(x = Metabolism, y = count, fill = Metabolism)) +
+  geom_bar(stat = "identity", width = 1) + 
+  theme(axis.text.x = element_blank()) + 
+  ggtitle("Bacteroidaceae")
+
+####PLOTTING THE Bifidobacteriaceae DISTRIBUTION#####
+
+AMGs.filtered.joined.iphop_bifido <- AMGs.filtered.joined.iphop[AMGs.filtered.joined.iphop$Family == "f__Bifidobacteriaceae",]
+bifido_AMG_distribution <-  AMG_distribution(AMGs.filtered.joined.iphop_bifido)
+
+
+ggplot(bifido_AMG_distribution, aes(x = Metabolism, y = count, fill = Metabolism)) +
+  geom_bar(stat = "identity", width = 1) + 
+  theme(axis.text.x = element_blank()) + 
+  ggtitle("Bifidobacteriaceae")
+
+
+####PLOTTING THE Oscillospiraceae DISTRIBUTION#####
+
+AMGs.filtered.joined.iphop_oscillo <- AMGs.filtered.joined.iphop[AMGs.filtered.joined.iphop$Family == "f__Oscillospiraceae",]
+oscillospiraceae_AMG_distribution <-  AMG_distribution(AMGs.filtered.joined.iphop_oscillo)
+
+
+ggplot(oscillospiraceae_AMG_distribution, aes(x = Metabolism, y = count, fill = Metabolism)) +
+  geom_bar(stat = "identity", width = 1) + 
+  theme(axis.text.x = element_blank()) + 
+  ggtitle("Oscillospiraceae")
+
+
+
+
+#I noticed enrichment in Enterobacteriaceae protein folding - lets look into this 
+
+AMGs.filtered.joined.iphop_entero <- AMGs.filtered.joined.iphop_entero
+
+
+AMGs.filtered.joined.iphop_entero$Metabolism <- gsub('"', '',   AMGs.filtered.joined.iphop_entero$Metabolism)
+
+AMGs.filtered.joined.iphop_entero.pf <- AMGs.filtered.joined.iphop_entero[AMGs.filtered.joined.iphop_entero$Metabolism == "Folding, sorting and degradation",]
+
+length(unique(AMGs.filtered.joined.iphop_entero.pf$scaffold)) 
+
+
+#look specifically at the CysO gene
+
+AMGs.filtered.joined.iphop_entero.pf.cyso <- AMGs.filtered.joined.iphop_entero[AMGs.filtered.joined.iphop_entero$AMG.KO.name == "mec; [CysO sulfur-carrier protein]-S-L-cysteine hydrolase [EC:3.13.1.6]",]
+
+length(unique(AMGs.filtered.joined.iphop_entero.pf.cyso$scaffold)) #14 entero scaffolds carry this gene
+
+
+
+
+
+##Look at cyso distribution across all PHFs##
+
+AMGs.filtered.joined.iphop.cyso <- AMGs.filtered.joined.iphop[AMGs.filtered.joined.iphop$AMG.KO.name == "mec; [CysO sulfur-carrier protein]-S-L-cysteine hydrolase [EC:3.13.1.6]",]
+length(unique(AMGs.filtered.joined.iphop.cyso$scaffold))
+table(AMGs.filtered.joined.iphop.cyso$Family)
+
+
+
+AMGs.filtered.joined.iphop.cyso 
+length(AMGs.filtered.joined.iphop.cyso$scaffold)
+
+length(unique(AMGs.filtered.joined.iphop.cyso$scaffold)) #21 total 
+
+
+#count the number of cyso per Mb sequenced 
+AMGs.filtered.joined.iphop.families.cyso <- AMGs.filtered.joined.iphop.cyso %>% 
+  group_by(Family) %>% 
+  summarize(n_AMGs = n_distinct(protein))
+
+
+
+ggplot(AMGs.filtered.joined.iphop.families.cyso, aes(x = reorder(Family,-n_AMGs
+) , y = n_AMGs
+)) +
+    geom_bar(stat = "identity") +  
+    labs(x = "PHF", y = "AMGs", 
+         title = "CysO") +
+    theme_minimal() + 
+        theme(axis.text.x = element_text(size = 8,angle = 45, hjust = 1, face="italic")) 
+
+
+joined.cyso <- left_join(sum_per_fam, AMGs.filtered.joined.iphop.families.cyso, by= "Family")
+
+#calculate per bp 
+joined.cyso$AMG.per.bp <- joined.cyso$n_AMGs/joined.cyso$sum_length
+
+joined.cyso$n_AMGs <- ifelse(is.na(joined.cyso$n_AMGs), 0, joined.cyso$n_AMGs)
+
+joined.cyso$AMG.per.bp <- ifelse(is.na(joined.cyso$AMG.per.bp), 0, joined.cyso$AMG.per.bp)
+
+joined.cyso$AMG.per.1000kbp <- (joined.cyso$n_AMGs/joined.cyso$sum_length)*1000000                                         
+joined.cyso
+
+ggplot(joined.cyso, aes(x = reorder(Family,-AMG.per.1000kbp
+) , y = AMG.per.1000kbp
+)) +
+    geom_bar(stat = "identity") +  
+    labs(x = "PHF", y = "AMGs per Mb", 
+         title = "CysO") +
+    theme_minimal() + 
+        theme(axis.text.x = element_text(size = 8,angle = 45, hjust = 1, face="italic")) 
+
+
+
+
+
+
+
+
+#### Stacked bar chart for AMG distribution #####
+
+AMGs.filtered.joined.iphop
+AMGs.filtered.joined.iphop.grouped.family <- AMGs.filtered.joined.iphop%>% 
+  group_by(Family, Metabolism) %>%
+  summarize(count=n_distinct(protein))
+
+
+#simplify to only those that have more than 10 contigs 
+AMGs.filtered.joined.iphop.2 <- AMGs.filtered.joined.iphop%>% 
+  group_by(Family) %>%
+  summarize(n_contigs_total=n_distinct(contigname))
+
+length(unique(AMGs.filtered.joined.iphop.grouped.family$Family))
+
+AMGs.filtered.joined.iphop.grouped.family.joined <- left_join(AMGs.filtered.joined.iphop.grouped.family, AMGs.filtered.joined.iphop.2, by= "Family")
+
+AMGs.filtered.joined.iphop.grouped.family.joined <- AMGs.filtered.joined.iphop.grouped.family.joined[AMGs.filtered.joined.iphop.grouped.family.joined$n_contigs_total >10,]
+
+length(unique(AMGs.filtered.joined.iphop.grouped.family.joined$Family)) #12 PHFs contain more than 10 AMGs
+
+AMGs.filtered.joined.iphop.grouped.family.joined <-  AMGs.filtered.joined.iphop.grouped.family.joined[!is.na(AMGs.filtered.joined.iphop.grouped.family.joined$Metabolism),]
+
+
+library(viridis)
+colors <- viridis(10)
+AMGs.filtered.joined.iphop.grouped.family.joined$Family <- gsub("f__", "", AMGs.filtered.joined.iphop.grouped.family.joined$Family )
+
+AMGs.filtered.joined.iphop.grouped.family.joined$Metabolism <- gsub('"', '', AMGs.filtered.joined.iphop.grouped.family.joined$Metabolism)
+
+
+ggplot(AMGs.filtered.joined.iphop.grouped.family.joined, aes(x = Family, y = count, fill = Metabolism)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+    scale_fill_manual(values = brewer.pal(12, "Set3")) +
+  labs(y = "Proportion", x = "", fill = "Metabolism Category") +
+  theme_minimal() + 
+    theme(axis.text.x = element_text(size = 8,angle = 45, hjust = 1, face="italic")) 
+
+
+
+##HOW MANY CONTIGS ARE THERE PER FAMILY??##
+
+AMGs.filtered.joined.iphop.2 <- AMGs.filtered.joined.iphop%>% 
+  group_by(Family) %>%
+  summarize(n_contigs_total=n_distinct(contigname))
+
+
+#now calculate the number of distinct contigs per metabolism family 
+
+#need to first ensure that all families and metabolism groups are there (this is to ensure for cases of Family where contig = 0)
+
+# Create all combinations of Family and Metabolism
+all_combinations <- AMGs.filtered.joined.iphop %>%
+  distinct(Family, Metabolism) %>%
+  complete(Family, Metabolism)
+
+
+# Summarize the data and count distinct contigs
+AMGs.filtered.joined.iphop.3 <- AMGs.filtered.joined.iphop %>%
+  group_by(Family, Metabolism) %>%
+  summarize(n_contigs = n_distinct(contigname))
+
+# Left join with all combinations and replace NA with 0
+AMGs.filtered.joined.iphop.3 <- all_combinations %>%
+  left_join(AMGs.filtered.joined.iphop.3, by = c("Family", "Metabolism")) %>%
+  replace_na(list(n_contigs = 0))
+
+
+#now join the two 
+
+AMGs.filtered.joined.iphop.4 <- left_join(AMGs.filtered.joined.iphop.3, AMGs.filtered.joined.iphop.2, by="Family")
+  AMGs.filtered.joined.iphop.4$prop <- AMGs.filtered.joined.iphop.4$n_contigs/AMGs.filtered.joined.iphop.4$n_contigs_total
+
+  AMGs.filtered.joined.iphop.4$Metabolism <- gsub('"', '',   AMGs.filtered.joined.iphop.4$Metabolism)
+
+
+
+  #now filter for the ones we care about 
+  AMGs.filtered.joined.iphop.5 <- AMGs.filtered.joined.iphop.4[AMGs.filtered.joined.iphop.4$Metabolism == "Carbohydrate metabolism" | AMGs.filtered.joined.iphop.4$Metabolism == "Amino acid metabolism" | AMGs.filtered.joined.iphop.4$Metabolism == "Energy metabolism" | AMGs.filtered.joined.iphop.4$Metabolism == "Metabolism of cofactors and vitamins" | AMGs.filtered.joined.iphop.4$Metabolism  == "Folding, sorting and degradation" | AMGs.filtered.joined.iphop.4$Metabolism == "Glycan biosynthesis and metabolism",]
+
+  
+
+  
+  
+  
+  
+  
+  
+  
+#####Group by PBF to see if certain PBFs are enriched in AMGs or in certain Metabolism modules etc.#####
+
+
+#join all contigs to get the total length of each contig  ###STARTING WITH JUST THE PROTEIN FOLDING ONES
+
+AMGs.filtered.joined.iphop.checkv.length <- left_join(AMGs.filtered.joined.iphop,checkV_virome, by= "contigname")
+                                 
+#now get the sum per family       
+sum_per_fam <- AMGs.filtered.joined.iphop.checkv.length %>% 
+  group_by(Family) %>%  
+  summarize(sum_length=sum(contig_length))
+
+#also plot in general the length per PHF
+
+
+ggplot(sum_per_fam, aes(x = reorder(Family,-sum_length
+) , y = sum_length
+)) +
+    geom_bar(stat = "identity") +  
+    labs(x = "PHF", y = "Assembled bases", 
+         title = "Assembled Bases") +
+    theme_minimal() + 
+        theme(axis.text.x = element_text(size = 8,angle = 45, hjust = 1, face="italic")) 
+
+
+
+
+
+
+
+
+
+
+
+#filter for just protein folding ones
+AMGs.filtered.joined.iphop$Metabolism <- gsub('"', "", AMGs.filtered.joined.iphop$Metabolism)
+AMGs.filtered.joined.iphop.pf <- AMGs.filtered.joined.iphop[AMGs.filtered.joined.iphop$Metabolism == "Folding, sorting and degradation",]
+
+#count the number of protein folding AMGs/fam
+
+AMGs.filtered.joined.iphop.families.pf <- AMGs.filtered.joined.iphop.pf %>% 
+  group_by(Family) %>% 
+  summarize(n_AMGs = n_distinct(protein))
+
+
+
+joined.pf <- left_join(sum_per_fam, AMGs.filtered.joined.iphop.families.pf, by= "Family")
+
+#calculate per bp 
+joined.pf$AMG.per.bp <- joined.pf$n_AMGs/joined.pf$sum_length
+
+
+#filter for just the PHFs that H
+joined.pf$n_AMGs <- ifelse(is.na(joined.pf$n_AMGs), 0, joined.pf$n_AMGs)
+
+joined.pf$AMG.per.bp <- ifelse(is.na(joined.pf$AMG.per.bp), 0, joined.pf$AMG.per.bp)
+
+joined.pf$AMG.per.1000kbp <- (joined.pf$n_AMGs/joined.pf$sum_length)*1000000                                         
+joined.pf
+
+
+
+#filter for the PHFs that have more than 10 contigs with AMGs 
+
+AMGs.filtered.joined.iphop.grouped.family.joined.10 <- AMGs.filtered.joined.iphop.grouped.family.joined[AMGs.filtered.joined.iphop.grouped.family.joined$n_contigs_total >10,]
+
+contigs.10.amgs <- AMGs.filtered.joined.iphop.grouped.family.joined.10$Family
+
+joined.pf$Family <- gsub("f__", "", joined.pf$Family )
+contigs.10.amgs
+
+joined.pf.filtered <- joined.pf %>% 
+  filter(Family %in% contigs.10.amgs)
+
+
+#now plot 
+
+ggplot(joined.pf.filtered, aes(x = reorder(Family,-AMG.per.1000kbp
+) , y = AMG.per.1000kbp
+)) +
+    geom_bar(stat = "identity") +  
+    labs(x = "PHF", y = "AMGs per Mb", 
+         title = "Protein Folding, Sorting and Degradation") +
+    theme_minimal() + 
+        theme(axis.text.x = element_text(size = 8,angle = 45, hjust = 1, face="italic")) 
+
+
+
+#Now do this agnostic to Metabolism Category 
+
+#count the number of protein folding AMGs/fam
+
+AMGs.filtered.joined.iphop.families.grouped.all <- AMGs.filtered.joined.iphop %>% 
+  group_by(Family) %>% 
+  summarize(n_AMGs = n_distinct(protein))
+
+
+
+joined.all.AMGs <- left_join(sum_per_fam, AMGs.filtered.joined.iphop.families.grouped.all, by= "Family")
+
+#calculate per bp 
+joined.all.AMGs$AMG.per.bp <- joined.all.AMGs$n_AMGs/joined.all.AMGs$sum_length
+
+
+#filter for just the PHFs that H
+joined.all.AMGs$n_AMGs <- ifelse(is.na(joined.all.AMGs$n_AMGs), 0, joined.all.AMGs$n_AMGs)
+
+joined.all.AMGs$AMG.per.bp <- ifelse(is.na(joined.all.AMGs$AMG.per.bp), 0, joined.all.AMGs$AMG.per.bp)
+joined.all.AMGs$AMG.per.1000kbp <- (joined.all.AMGs$n_AMGs/joined.all.AMGs$sum_length)*1000000                                         
+joined.all.AMGs
+
+joined.all.AMGs$Family <- gsub("f__", "", joined.all.AMGs$Family )
+contigs.10.amgs
+
+joined.all.AMGs.Filtered <- joined.all.AMGs %>% 
+  filter(Family %in% contigs.10.amgs)
+
+ggplot(joined.all.AMGs.Filtered, aes(x = reorder(Family,-AMG.per.1000kbp
+) , y = AMG.per.1000kbp
+)) +
+    geom_bar(stat = "identity") +  
+    labs(x = "PHF", y = "AMGs per Mb", 
+         title = "All AMGs") +
+    theme_minimal() + 
+        theme(axis.text.x = element_text(size = 8,angle = 45, hjust = 1, face="italic")) 
+
+
+
+
+####now do this based on carb metabolism #####
+
+AMGs.filtered.joined.iphop.carb <- AMGs.filtered.joined.iphop[AMGs.filtered.joined.iphop$Metabolism == "Carbohydrate metabolism",]
+
+#count the number of protein folding AMGs/fam
+
+AMGs.filtered.joined.iphop.families.carb <- AMGs.filtered.joined.iphop.carb %>% 
+  group_by(Family) %>% 
+  summarize(n_AMGs = n_distinct(protein))
+
+
+
+joined.carb <- left_join(sum_per_fam, AMGs.filtered.joined.iphop.families.carb, by= "Family")
+
+#calculate per bp 
+joined.carb$AMG.per.bp <- joined.carb$n_AMGs/joined.carb$sum_length
+
+
+#filter for just the PHFs that H
+joined.carb$n_AMGs <- ifelse(is.na(joined.carb$n_AMGs), 0, joined.carb$n_AMGs)
+
+joined.carb$AMG.per.bp <- ifelse(is.na(joined.carb$AMG.per.bp), 0, joined.carb$AMG.per.bp)
+
+joined.carb$AMG.per.1000kbp <- (joined.carb$n_AMGs/joined.carb$sum_length)*1000000                                         
+joined.carb
+
+
+
+
+
+
+
+
+
+#filter for the PHFs that have more than 10 contigs with AMGs 
+
+AMGs.filtered.joined.iphop.grouped.family.joined.10 <- AMGs.filtered.joined.iphop.grouped.family.joined[AMGs.filtered.joined.iphop.grouped.family.joined$n_contigs_total >10,]
+
+contigs.10.amgs <- AMGs.filtered.joined.iphop.grouped.family.joined.10$Family
+
+joined.carb$Family <- gsub("f__", "", joined.carb$Family )
+contigs.10.amgs
+
+joined.carb.filtered <- joined.carb %>% 
+  filter(Family %in% contigs.10.amgs)
+
+
+#now plot 
+
+ggplot(joined.carb.filtered, aes(x = reorder(Family,-AMG.per.1000kbp
+) , y = AMG.per.1000kbp
+)) +
+    geom_bar(stat = "identity") +  
+    labs(x = "PHF", y = "AMGs per Mb", 
+         title = "Carbohydrate Metabolism") +
+    theme_minimal() + 
+        theme(axis.text.x = element_text(size = 8,angle = 45, hjust = 1, face="italic")) 
+
+
+
+
+
+
+
+
+#### Investigate Amino Acid Metabolism ####
+
+
+AMGs.filtered.joined.iphop.AA <- AMGs.filtered.joined.iphop[AMGs.filtered.joined.iphop$Metabolism == "Amino acid metabolism",]
+
+
+
+
+
+### 
+
+
+```
+
+
+
+
+
+```{r}
+####FIGURE 3 ###  PBF vs. vOTU  PREVALENCE DISTRIBUTION 
+
+
+library(cowplot)
+
+three_A <- ggplot(df_hmp_virome_votu_prevalence, aes(x = rank_prev_ind, y = prevalence_ind)) +
+    geom_point(size = 0.1) +  
+    geom_jitter() + 
+    labs(x = "Rank", y = "vOTU Prevalence", 
+         title = "vOTU Prevalence") +
+    annotate("segment", x = 233, xend = 233, y = 0, yend = 1, 
+           linetype = "dashed", color = "red", size = 1) +
+    theme_minimal() +
+    theme(axis.text.x = element_blank()) + # Removes species labels
+    theme(plot.title = element_text(size = 12))
+
+
+
+
+
+three_B <- ggplot(df_hmp_virome_pbf_prevalence, aes(x = rank_prev_ind, y = prevalence_ind)) +
+    geom_point(size = 0.1) + 
+    geom_jitter() +
+    labs(x = "Rank", y = "PHF Prevalence", 
+         title = "PHF Prevalence") +
+    annotate("segment", x = 18.5, xend = 18.5, y = 0, yend = 1, 
+           linetype = "dashed", color = "red", size = 1) +
+    theme_minimal() +
+    theme(axis.text.x = element_blank()) +   # Removes species label   # Adjusts plot title size
+    theme(plot.title = element_text(size = 12))
+
+
+
+#This figure shows the cumulative relative abundance of prevalent features of Individuals (not samples )
+colors <- c( "#a0d6b4", "#C3B1E1")
+three_c <-  merged.prev.df  %>% 
+  ggplot(aes(x = metric, y = sample_abundance, fill = metric)) +
+  geom_violin(scale = "width", aes(fill=metric), alpha = 0.3, position = position_dodge(width = 0.9)) +
+  geom_boxplot(outlier.shape = NA, width = 0.3, aes(fill=metric), color="black", position = position_dodge(width = 0.9)) +
+  annotate("segment", x = 1, xend = 2, y = 1.09, yend = 1.09, 
+          linetype = "solid", color = "black", size = 1) +
+  annotate("text", x = 1.5, y = 1.13, label = "****", size = 4.5, color = "black") +  
+
+  scale_fill_viridis(discrete = TRUE, begin = 0.7, end = 0.1, labels = labels) +  # Swap begin and end
+  scale_colour_viridis(discrete = TRUE, begin = 0.7, end = 0.1, labels = labels) +
+  
+  scale_fill_manual(values = colors, labels = c("PHF", "vOTU")) +  # Ensure manual colors match
+  scale_color_manual(values = colors, labels = c("PHF", "vOTU")) +  
+
+  labs(x = "", y = "Relative Abundance") +
+  labs(fill = "Distance metric") + 
+  scale_x_discrete(labels = c("PHF", "vOTU")) +
+  scale_y_continuous(limits = c(0, 1.2)) +   
+  theme_bw() + ggtitle("Prevalent Features") + 
+      theme(plot.title = element_text(size = 12))
+
+
+
+
+colors <- c("#C3B1E1", "#a0d6b4")
+three_d <- bray_distance_df  %>% 
+  ggplot(aes(x = same.subject, y = value, fill = metric)) +
+ geom_violin(scale = "width", aes(fill=metric), alpha = 0.3, position = position_dodge(width = 0.9)) +
+  geom_boxplot(outlier.shape = NA, width = 0.3, aes(fill=metric), color="black", position = position_dodge(width = 0.9)) +
+    annotate("segment", x = 0.75, xend = 1.25, y = 1.09, yend = 1.09, 
+           linetype = "solid", color = "black", size = 1) +
+     annotate("text", x = 1, y = 1.15, label = "****", size = 4.5, color = "black") +  
+
+       annotate("segment", x = 1.75, xend = 2.25, y = 1.03, yend = 1.03, 
+           linetype = "solid", color = "black", size = 1) +
+     annotate("text", x = 2, y = 1.05, label = "****", size = 4.5, color = "black") +  
+
+  scale_fill_viridis(discrete = T, begin = 0.1, end = 0.7, labels = labels) +
+  scale_colour_viridis(discrete = T, begin = 0.1, end = 0.7, labels = labels) +
+  scale_fill_manual(values = colors, labels = c("vOTU", "PHF")) +  
+  scale_color_manual(values = colors, labels = c("vOTU", "PHF")) +  
+ # geom_jitter(alpha = 0.05) +
+  #scale_fill_brewer(palette = "Set1") + 
+  #facet_wrap(. ~ same.subject, labeller = label_parsed) + 
+   scale_fill_manual(values = colors) +  
+  scale_color_manual(values = colors) +  
+      scale_y_continuous(limits = c(0, 1.24)) +   # Set y-axis limit here
+    scale_fill_manual(values = colors, labels = c("vOTU", "PHF")) +  # Ensure manual colors match
+  scale_color_manual(values = colors, labels = c("vOTU", "PHF")) +  
+   labs(x = "", y = "Bray Distance") +
+   labs(fill = "Distance metric") + 
+   scale_x_discrete(labels = c("Inter-individual", "Intra-individual")) +
+  theme_bw() + ggtitle("Between Sample Distance") + 
+  
+  # Rotate x-axis labels
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+      theme(plot.title = element_text(size = 12)) +
+   theme(legend.position = "none")
+
+
+
+  
+
+fig_three  <- plot_grid(three_A,three_B, three_c, three_d, rel_heights = c(1,1.4),labels = c("A", "B", "C", "D")) #combine the plots into one plotting space
+
+
+
+
+ggsave(filename = "/Users/anshulsinha/Desktop/PBF_manuscript/figure3.pdf", plot = fig_three, width = 10, height = 8, dpi = 800)
+
+
+
+
+```
+
+```{r}
+###### FIGURE 4 #######
+
+ 
+fig4A1 <- PCoA_vOTU.Bray.Dysbiosis + ggtitle("vOTU") + theme_bw() + 
+  labs(color = "Dysbiosis Status",x = "PCoA Axis 1 (7.1%)", y = "PCoA Axis 2 (3.9%)") + # Modify axis names) + 
+ scale_color_manual(values = c("No" = "#AF9117", "Yes" = "#06402B"), # Adjust color labels
+                     labels = c("No" = "Non-Dysbiotic", "Yes" = "Dysbiotic")) + 
+    theme(legend.title = element_text(size = 14),   # Increase legend title size
+        legend.text = element_text(size = 12), plot.title = element_text(size = 18))  
+
+ fig4A2 <- PCoA_PBF.Bray.Dysbiosis  + ggtitle("PHF") + theme_bw() + 
+  labs(color = "Dysbiosis Status",x = "PCoA Axis 1 (30.6%)", y = "PCoA Axis 2 (8.7%)") + # Modify axis names) + 
+ scale_color_manual(values = c("No" = "#AF9117", "Yes" = "#06402B"), # Adjust color labels
+                     labels = c("No" = "Non-Dysbiotic", "Yes" = "Dysbiotic")) + 
+    theme(legend.title = element_text(size = 14),   # Increase legend title size
+        legend.text = element_text(size = 12), plot.title = element_text(size = 18)) + 
+    theme(legend.position = "none")
+
+
+
+ 
+fig4B <- EV_col_con 
+fig4B
+ 
+
+
+ 
+fig4.top <- plot_grid(fig4A1, fig4A2,rel_widths = c(1.5,1), rel_heights = c(1,1),labels = c("A", ""), label_size = 18)
+fig4.bottom <- plot_grid(fig4B, rel_widths = c(1.24,1), rel_heights = c(1,1),labels = c("B"), label_size = 18)
+comb4 <- plot_grid(fig4.top,fig4.bottom, ncol = 1)
+
+
+ggsave(filename = "/Users/anshulsinha/Desktop/PBF_manuscript/figure4.png", plot = comb4, width = 10, height = 8, dpi = 300)
+
+
+
+
+
+```
+
+
+
+
+
+```{r}
+
+#####Supplementary Figure 1 - Contigs Per PBF #######
+
+# Select the first 5 rows based on the reordered Family
+top_5_families <- df_hmp_iphop_all.analyses.2.grouped %>%
+    arrange(desc(contig_count)) %>%
+    slice_head(n = 5)
+
+
+
+sup_fig1 <- ggplot(df_hmp_iphop_all.analyses.2.grouped, aes(x = reorder(Family,-contig_count) , y = contig_count)) +
+    geom_point(size = 2) +  
+    labs(x = "PHF", y = "vOTUs per PHF", 
+         title = "vOTUs per PHF")  +
+    theme_minimal() +
+    theme(axis.text.x = element_blank())  # Removes species labels
+
+
+ggsave(filename = "/Users/anshulsinha/Desktop/PBF_manuscript/sup_fig1.png", plot = sup_fig1, width = 10, height = 8, dpi = 800)
+
+
+
+
+
+```
+
+
+
+```{r}
+####### Supplementary Figure 2 - AMGs ########
+
+
+colors <- viridis(10)
+AMGs.filtered.joined.iphop.grouped.family.joined <-  AMGs.filtered.joined.iphop.grouped.family.joined[!is.na(AMGs.filtered.joined.iphop.grouped.family.joined$Metabolism),]
+
+AMGs.filtered.joined.iphop.grouped.family.joined$Metabolism <- gsub('"', '', AMGs.filtered.joined.iphop.grouped.family.joined$Metabolism)
+
+AMGs.filtered.joined.iphop.grouped.family.joined$Metabolism <- gsub('"', '', AMGs.filtered.joined.iphop.grouped.family.joined$Metabolism)
+
+
+
+figS2A <- ggplot(AMGs.filtered.joined.iphop.grouped.family.joined, aes(x = Family, y = count, fill = Metabolism)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+    scale_fill_manual(values = brewer.pal(12, "Set3")) +
+  labs(y = "Relative Proportion", x = "PHF", fill = "KEGG Metabolism Category") +
+  theme_minimal() + 
+    theme(axis.text.x = element_text(size = 8,angle = 45, hjust = 1, face="italic")) + 
+  
+  theme(
+    legend.key.size = unit(0.2, "cm"),  # Key size
+    legend.text = element_text(size = 9)  # Text size
+  ) + 
+  theme(legend.title = element_text(size = 12, hjust = 0.5))
+
+
+
+figS2B <- ggplot(joined.carb.filtered, aes(x = reorder(Family,-AMG.per.1000kbp
+) , y = AMG.per.1000kbp
+)) +
+    geom_bar(stat = "identity") +  
+    labs(x = "PHF", y = "AMGs per Mb", 
+         title = "Carbohydrate Metabolism Genes") +
+    theme_minimal() + 
+        theme(axis.text.x = element_text(size = 6,angle = 45, hjust = 1, face="italic")) +
+    theme(plot.title = element_text(size = 11))  # Adjust the size as needed
+
+
+figS2C <- ggplot(joined.pf.filtered, aes(x = reorder(Family,-AMG.per.1000kbp
+) , y = AMG.per.1000kbp
+)) +
+    geom_bar(stat = "identity") +  
+    labs(x = "PHF", y = "AMGs per Mb", 
+         title = "Folding, Sorting and Degradation Genes") +
+    theme_minimal() + 
+        theme(axis.text.x = element_text(size = 8,angle = 45, hjust = 1, face="italic")) +
+    theme(plot.title = element_text(size = 11))  # Adjust the size as needed
+
+
+
+
+AMGs.filtered.joined.iphop.families.cyso$Family <- gsub('f__', '', AMGs.filtered.joined.iphop.families.cyso$Family)
+
+figS2D <- ggplot(AMGs.filtered.joined.iphop.families.cyso, aes(x = reorder(Family,-n_AMGs
+) , y = n_AMGs
+)) +
+    geom_bar(stat = "identity") +  
+    labs(x = "PHF", y = "vOTUs carrying AMG", 
+         title = "cysO") +
+    theme_minimal() + 
+        theme(axis.text.x = element_text(size = 8,angle = 45, hjust = 1, face="italic")) +
+                theme(plot.title = element_text(face = "italic")) + 
+  theme(plot.title = element_text(size = 11))
+
+
+
+
+topS2 <-plot_grid(figS2A,  labels = c("A"), label_size = 18) 
+
+
+
+botS2.1 <- plot_grid(figS2B, figS2C, figS2D,labels = c("B", "C", "D"), label_size = 18, nrow  = 1)
+
+
+
+
+combS2.2 <- plot_grid(topS2, botS2.1, nrow = 2)
+
+
+
+
+ggsave(filename = "/Users/anshulsinha/Desktop/PBF_manuscript/supplementary_figure_2.pdf", plot = combS2.2, width = 10, height = 8, dpi = 800)
+
+
+
+
+
+```
+
+
+```{r}
+####### Supplementary Figure 3 - Bray PCoA Diagnosis ########
+
+
+sup3_1 <- PCoA_vOTU.Bray.Diagnosis + ggtitle("vOTU") + theme_bw() + 
+  labs(color = "Diagnosis",x = "PCoA Axis 1 (7.1%)", y = "PCoA Axis 2 (3.9%)") + # Modify axis names) + 
+ scale_color_manual(values = c("nonIBD" = "#06402B", "CD" = "#ff2d29", "UC" = "#A020F0"), # Adjust color labels
+                     labels = c("nonIBD" = "Non-IBD", "CD" = "CD", "UC" = "UC")) + 
+    theme(legend.title = element_text(size = 14),   # Increase legend title size
+        legend.text = element_text(size = 12)) 
+
+
+ fig3A2 <- PCoA_PBF.Bray.Diagnosis  + ggtitle("PHF") + theme_bw() + 
+  labs(color = "Dysbiosis Status",x = "PCoA Axis 1 (30.6%)", y = "PCoA Axis 2 (8.7%)") + # Modify axis names) + 
+ scale_color_manual(values = c("nonIBD" = "#06402B", "CD" = "#ff2d29", "UC" = "#A020F0"), # Adjust color labels
+                     labels = c("nonIBD" = "Non-IBD", "CD" = "CD", "UC" = "UC")) + 
+    theme(legend.title = element_text(size = 14),   # Increase legend title size
+        legend.text = element_text(size = 12)) + 
+    theme(legend.position = "none")
+
+
+ sup_fig3 <- plot_grid(sup3_1, fig3A2,rel_widths = c(1.5,1))
+                       
+
+```
+
