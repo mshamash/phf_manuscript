@@ -1,5 +1,6 @@
 library(tidyverse)
 library(phyloseq)
+library(vegan)
 library(reshape2)
 
 library(microshades)
@@ -200,7 +201,7 @@ pairwise.wilcox.test(dist.merged.all.stats.samesubject$value, dist.merged.all.st
 # stability over time
 
 # overview of number of samples remaining per subject
-metadata.filt %>% 
+metadata.joined %>% 
   select(Subject, Time_point) %>% 
   group_by(Subject) %>% 
   summarize(nrows = n())
@@ -209,8 +210,8 @@ dist.merged.all.filt.timepoints <- dist.merged.all.filt %>%
   filter(same.subject) %>% 
   filter(!metric %in% c("dist.aitch.filt", "dist.aitch.filt.phf")) %>% 
   select(sample1, sample2, metric, value) %>% 
-  left_join(metadata.filt %>% select(Date, Sample, Subject), by = c("sample1" = "Sample")) %>% 
-  left_join(metadata.filt %>% select(Date, Sample, Subject), by = c("sample2" = "Sample"), suffix = c(".sample1", ".sample2")) %>% 
+  left_join(metadata.joined %>% select(Date, Sample, Subject), by = c("sample1" = "Sample")) %>% 
+  left_join(metadata.joined %>% select(Date, Sample, Subject), by = c("sample2" = "Sample"), suffix = c(".sample1", ".sample2")) %>% 
   mutate()
 
 
@@ -237,8 +238,8 @@ dist.merged.all.filt.timepoints.final <- dist.merged.all.filt.timepoints %>%
 fig2c <- dist.merged.all.filt.timepoints.final %>% 
   filter(!metric %in% c("dist.wuni.filt.phf")) %>% 
   ggplot(aes(x = Subject.sample1, y = 1-value, group = interaction(Subject.sample1, metric), color = metric)) +
-    geom_violin(scale = "width", aes(fill=metric), alpha = 0.3, position = position_dodge(width = 0.9)) +
-    geom_boxplot(outlier.shape = NA, width = 0.3, aes(fill = metric), color = "black", position = position_dodge(width = 0.9)) +
+    geom_boxplot(outlier.shape = NA, width = 0.75, aes(fill = metric), alpha = 0.4, color = "black", position = position_dodge(width = 1)) +
+    geom_point(position = position_jitterdodge()) +
     scale_fill_viridis(discrete = T, begin = 0.1, end = 0.3, labels = labels) +  
     scale_colour_viridis(discrete = T, begin = 0.1, end = 0.3, labels = labels) +
     theme_bw() +
@@ -268,4 +269,43 @@ fig2 <- ggarrange(fig2a,
           ggarrange(fig2b.2row, fig2c.2row, ncol = 1, common.legend = T, legend = "bottom", labels = c("B", "C")),
           ncol = 2, labels = "A", widths = c(2, 0.8))
 
-ggsave(file="Figure2.jpg", plot=fig2, width=16, height=8)
+ggsave(file="Figure2.pdf", plot=fig2, width=16, height=8)
+
+
+
+
+# SUPPLEMENTARY FIGURE 1 - CHECKV FILTERING
+checkv.out <- read_tsv("quality_summary.tsv")
+checkv.filt <- checkv.out %>% filter(completeness > 50)
+dim(checkv.filt)
+
+
+ps.melted.host.filt <- ps.melted.host %>% filter(OTU %in% checkv.filt$contig_id)
+
+#scale abundances considering we removed contigs <=50% complete
+ps.melted.host.filt <- ps.melted.host.filt %>% group_by(Sample) %>% mutate(Abundance = Abundance/sum(Abundance))
+
+ps.melted.host.filt$`Host genome`[is.na(ps.melted.host.filt$`Host genome`)] <- "Unknown"
+
+
+color_objs.hic <- create_color_dfs(as.data.frame(ps.melted.host.filt),
+                                   selected_groups = c("Desulfobacterota", "Proteobacteria", "Actinobacteriota",
+                                                       "Bacteroidota", "Firmicutes"),
+                                   group_level = "phylum",
+                                   subgroup_level = "family",
+                                   top_orientation = TRUE)
+mdf.hic <- color_objs.hic$mdf
+cdf.hic <- color_objs.hic$cdf
+legend.hic <- custom_legend(mdf.hic, cdf.hic, group_level = "phylum", subgroup_level = "family", legend_key_size = 0.6, legend_text_size = 14)
+
+
+plot_diff.hic <- plot_microshades(mdf.hic, cdf.hic, x = "Sample") + 
+  scale_y_continuous(labels = scales::percent, expand = expansion(0)) +
+  facet_grid(. ~ Subject, scales = "free", space = "free") +
+  theme(axis.text.x = element_text(size= 10)) +
+  theme(legend.position = "none") +
+  theme(axis.text.x=element_blank())
+
+suppl.fig1 <-  plot_grid(plot_diff.hic, arrangeGrob(legend, nullGrob(), ncol = 1, heights = c(0.80, 0.20)),  rel_widths = c(1, .25))
+
+ggsave(file="SupplFigure1.pdf", plot=suppl.fig1, width=12.8, height=8)
