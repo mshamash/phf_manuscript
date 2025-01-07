@@ -60,6 +60,53 @@ iphop_out.hic.split %>% filter(Virus %in% viralhost.summary.merged$mobile_contig
 iphop_out.hic.split %>% filter(Virus %in% viralhost.summary.merged$mobile_contig_name) %>% 
   pull(genus) %>% unique() %>% length() # 108 unique genus-level hosts
 
+### Reviewer 2 comment
+
+iphop_out.hic.split %>% 
+  filter(Virus %in% viralhost.summary.merged$mobile_contig_name) %>% 
+  group_by(Virus) %>% 
+  arrange(desc(`Confidence score`)) %>% 
+  filter(n() > 1)
+#252 phage contigs have >1 genus-level predicted host
+#(596 phage-host pairings total, so average of 2.37 hosts per phage)
+
+iphop_out.hic.split %>% 
+  filter(Virus %in% viralhost.summary.merged$mobile_contig_name) %>% 
+  group_by(Virus) %>% 
+  arrange(desc(`Confidence score`)) %>% 
+  filter(n() > 1) %>% 
+  select(Virus, family, `Confidence score`) %>% 
+  summarise(n_family = as.factor(length(unique(family)))) %>% 
+  summary()
+#of the 252 contigs, 231 (91.7%) of them had the same family-level prediction,
+#20 (7.9%) of them had different 2 family-level predictions,
+#and 1 (0.4%) of them had 3 different family-level predictions
+
+
+multi.family.phages <- iphop_out.hic.split %>% 
+  filter(Virus %in% viralhost.summary.merged$mobile_contig_name) %>% 
+  group_by(Virus) %>% 
+  arrange(desc(`Confidence score`)) %>% 
+  filter(n() > 1) %>% 
+  select(Virus, family, `Confidence score`) %>% 
+  summarise(n_family = length(unique(family))) %>% 
+  filter(n_family > 1) %>% pull(Virus)
+
+iphop_out.hic.split %>% 
+  filter(Virus %in% viralhost.summary.merged$mobile_contig_name) %>% 
+  group_by(Virus) %>% 
+  arrange(desc(`Confidence score`)) %>% 
+  filter(n() > 1) %>% 
+  select(Virus, order, `Confidence score`) %>% 
+  filter(Virus %in% multi.family.phages) %>% 
+  summarise(n_order = as.factor(length(unique(order)))) %>% 
+  summary()
+#of the 21 phages with more than 1 family hit, 15 (71%) of them were within the same predicted order,
+#the remaining 6 (29%) of them had a different order predicted
+
+###
+
+
 # Comparison between HiC and iPHoP - TOP HIT (HI-C) VS TOP HIT (IPHOP)
 comparison <- inner_join(iphop_out.hic.split %>% 
                            filter(!is.na(genus)) %>% 
