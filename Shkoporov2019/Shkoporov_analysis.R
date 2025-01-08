@@ -309,3 +309,29 @@ plot_diff.hic <- plot_microshades(mdf.hic, cdf.hic, x = "Sample") +
 suppl.fig1 <-  plot_grid(plot_diff.hic, arrangeGrob(legend, nullGrob(), ncol = 1, heights = c(0.80, 0.20)),  rel_widths = c(1, .25))
 
 ggsave(file="SupplFigure1.pdf", plot=suppl.fig1, width=12.8, height=8)
+
+
+### Reviewer 3 comment – AMG analysis
+vibrant.amgs <- read_tsv("VIBRANT_AMG_individuals_selected_contigs.tsv")
+
+vibrant.amgs.per.contig <- vibrant.amgs %>% 
+  group_by(scaffold) %>% 
+  summarize(n = n()) %>% 
+  ungroup()
+
+dim(vibrant.amgs.per.contig) # 1,618 viral contigs have AMGs, out of 11,802 putative phages identified by VIBRANT (14%)
+
+vibrant.amgs.per.phf <- 
+  left_join(
+    vibrant.amgs,
+    ps.melted.host %>% select(OTU, family) %>% distinct(),
+    by = c("scaffold" = "OTU")
+  ) %>% 
+  group_by(family) %>% 
+  summarize(n = n()) %>% 
+  ungroup() # 72 PHFs have AMGs, out of 169 PHFs total in this dataset (43%)
+
+vibrant.amgs.per.phf %>% 
+  filter(n>10) # 22 PHFs have >10 AMGs, out of 169 PHFs total in this dataset (13%)
+
+ps.melted.host %>% select(family) %>% distinct() %>% dim() # this dataset has 169 PHFs
