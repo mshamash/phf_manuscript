@@ -44,10 +44,15 @@ iphop_out.split$species <- sapply(strsplit(iphop_out.split$species, "_"), `[`, 1
 ps.melted.host <- ps.melted %>% 
   left_join(iphop_out.split, by = c("OTU" = "Virus")) # merge iphop data with melted ps data
 
+ps.melted.host$phylum <- gsub("Proteobacteria", "Pseudomonadota", ps.melted.host$phylum)
+ps.melted.host$phylum <- gsub("Desulfobacterota", "Thermodesulfobacteriota", ps.melted.host$phylum)
+ps.melted.host$phylum <- gsub("Actinobacteriota", "Actinomycetota", ps.melted.host$phylum)
+ps.melted.host$phylum <- gsub("Firmicutes", "Bacillota", ps.melted.host$phylum)
+
 #FIGURE 2A - plot relative abundance of phages at PHF level
 color_objs <- create_color_dfs(as.data.frame(ps.melted.host),
-                                   selected_groups = c("Desulfobacterota", "Proteobacteria", "Actinobacteriota",
-                                                       "Bacteroidota", "Firmicutes"),
+                                   selected_groups = c("Thermodesulfobacteriota", "Pseudomonadota", "Actinomycetota",
+                                                       "Bacteroidota", "Bacillota"),
                                    group_level = "phylum",
                                    subgroup_level = "family",
                                    top_orientation = TRUE)
@@ -267,9 +272,9 @@ fig2b.2row <- fig2b + guides(fill = guide_legend(nrow = 2, ncol = 2))
 fig2c.2row <- fig2c + guides(fill = guide_legend(nrow = 2, ncol = 2))
 fig2 <- ggarrange(fig2a, 
           ggarrange(fig2b.2row, fig2c.2row, ncol = 1, common.legend = T, legend = "bottom", labels = c("B", "C")),
-          ncol = 2, labels = "A", widths = c(2, 0.8))
+          ncol = 2, labels = "A", widths = c(2.4, 0.8))
 
-ggsave(file="Figure2.pdf", plot=fig2, width=16, height=8)
+ggsave(file="Figure2.pdf", plot=fig2, width=18.5, height=8)
 
 
 
@@ -287,6 +292,10 @@ ps.melted.host.filt <- ps.melted.host.filt %>% group_by(Sample) %>% mutate(Abund
 
 ps.melted.host.filt$`Host genome`[is.na(ps.melted.host.filt$`Host genome`)] <- "Unknown"
 
+ps.melted.host.filt$phylum <- gsub("Proteobacteria", "Pseudomonadota", ps.melted.host.filt$phylum)
+ps.melted.host.filt$phylum <- gsub("Desulfobacterota", "Thermodesulfobacteriota", ps.melted.host.filt$phylum)
+ps.melted.host.filt$phylum <- gsub("Actinobacteriota", "Actinomycetota", ps.melted.host.filt$phylum)
+ps.melted.host.filt$phylum <- gsub("Firmicutes", "Bacillota", ps.melted.host.filt$phylum)
 
 color_objs.hic <- create_color_dfs(as.data.frame(ps.melted.host.filt),
                                    selected_groups = c("Desulfobacterota", "Proteobacteria", "Actinobacteriota",
